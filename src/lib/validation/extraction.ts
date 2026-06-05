@@ -1,0 +1,144 @@
+import type { ExtractionResult, SourceKind } from '@/lib/claude';
+
+const VALID_FACT_TYPES = new Set([
+  'role',
+  'org',
+  'location',
+  'interest',
+  'background',
+  'context',
+  'connection',
+  'quote',
+]);
+
+const VALID_RELATIONSHIP_TYPES = new Set([
+  'colleagues',
+  'co_investors',
+  'collaborators',
+  'introduced_by',
+  'shared_interest',
+  'classmates',
+  'co_founders',
+]);
+
+export interface InvalidItem {
+  item: unknown;
+  reason: string;
+}
+
+export interface ValidationResult {
+  validFacts: ExtractionResult['facts'];
+  validEdges: ExtractionResult['edges'];
+  invalid: InvalidItem[];
+}
+
+// Implements all 7 DM §6.3 validation rules.
+// Invalid items are collected and returned — never thrown.
+// Partial success: valid items are written even when some fail.
+export function validateExtractionOutput(
+  result: ExtractionResult,
+  sourceKind: SourceKind
+): ValidationResult {
+  const invalid: InvalidItem[] = [];
+
+  // ── Facts ──────────────────────────────────────────────────────────────────
+
+  const validFacts: ExtractionResult['facts'] = [];
+
+  for (const f of result.facts) {
+    // Rule 1: non-empty required fields
+    if (!f.person_name?.trim() || !f.type?.trim() || !f.value?.trim()) {
+      invalid.push({
+        item: f,
+        reason: 'missing required field: person_name, type, or value',
+      });
+      continue;
+    }
+
+    // Rule 2: legal fact type
+    if (!VALID_FACT_TYPES.has(f.type)) {
+      invalid.push({ item: f, reason: `invalid type "${f.type}"` });
+      continue;
+    }
+
+    // Rule 6: quotes only from conversation sources
+    if (f.type === 'quote' && sourceKind !== 'conversation') {
+      invalid.push({
+        item: f,
+        reason: 'quote facts are only valid when source kind is conversation',
+      });
+      continue;
+    }
+
+    // Rule 7: value length cap — truncate and flag but keep
+    const value =
+      f.value.length > 500
+        ? (invalid.push({
+            item: f,
+            reason: `value truncated from ${f.value.length} to 500 chars`,
+          }),
+          f.value.slice(0, 500))
+        : f.value;
+
+    validFacts.push({ ...f, value });
+  }
+
+  // ── Edges ──────────────────────────────────────────────────────────────────
+
+  const validEdges: ExtractionResult['edges'] = [];
+
+  for (const e of result.edges) {
+    // Rule 1 (edges): non-empty fields
+    if (
+      !e.person_a?.trim() ||
+      !e.person_b?.trim() ||
+      !e.relationship_type?.trim()
+    ) {
+      invalid.push({
+        item: e,
+        reason:
+          'missing required field: person_a, person_b, or relationship_type',
+      });
+      continue;
+    }
+
+    // Rule 4: no self-referential edges
+    if (e.person_a.toLowerCase() === e.person_b.toLowerCase()) {
+      invalid.push({
+        item: e,
+        reason: 'self-referential edge (person_a equals person_b)',
+      });
+      continue;
+    }
+
+    // Rule 3: legal relationship type
+    if (!VALID_RELATIONSHIP_TYPES.has(e.relationship_type)) {
+      invalid.push({
+        item: e,
+        reason: `invalid relationship_type "${e.relationship_type}"`,
+      });
+      continue;
+    }
+
+    validEdges.push(e);
+  }
+
+  // ── Rule 5: connection facts must have a matching edge ─────────────────────
+
+  for (const f of validFacts.filter((f) => f.type === 'connection')) {
+    const personLower = f.person_name.toLowerCase();
+    const hasEdge = validEdges.some(
+      (e) =>
+        e.person_a.toLowerCase() === personLower ||
+        e.person_b.toLowerCase() === personLower
+    );
+    if (!hasEdge) {
+      invalid.push({
+        item: f,
+        reason: 'connection fact has no corresponding edge',
+      });
+    }
+  }
+
+  return { validFacts, validEdges, invalid };
+}
