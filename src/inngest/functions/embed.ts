@@ -27,21 +27,23 @@ export const embedPersonFacts = inngest.createFunction(
       `
     );
 
-    // ── Step 2: Embed each fact and write the vector ─────────────────────────
+    // ── Step 2: Embed each fact — one step.run per fact ─────────────────────
+    // Each fact is its own Inngest step so failures are retried independently.
+    // A single monolithic loop step would abort the entire batch on the first
+    // failed embedText() call, leaving remaining facts with null embeddings.
     // Raw SQL required for the write — prisma.fact.update errors on Unsupported fields.
-    const embedded = await step.run('embed-and-write', async () => {
-      let count = 0;
-      for (const fact of facts) {
+    let embedded = 0;
+    for (const fact of facts) {
+      await step.run(`embed-fact-${fact.id}`, async () => {
         const vector = await embedText(fact.value);
         await prisma.$executeRaw`
           UPDATE facts
           SET embedding = ${JSON.stringify(vector)}::vector
           WHERE id = ${fact.id}::uuid
         `;
-        count++;
-      }
-      return count;
-    });
+      });
+      embedded++;
+    }
 
     // ── Step 3: Compute shared_interest edges ────────────────────────────────
     // shared_interest is the only edge type not extracted by Claude — it is
