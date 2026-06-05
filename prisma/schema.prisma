@@ -1,0 +1,153 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Layer 0: Users ───────────────────────────────────────────────────────────
+// DM §3.1 — root of the per-user isolation model
+
+model User {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clerk_id   String   @unique @db.Text
+  email      String   @db.Text
+  plan       String   @default("free") @db.Text
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  people  People[]
+  sources Source[]
+  edges   Edge[]
+
+  @@map("users")
+}
+
+// ─── Layer 1: Entities ────────────────────────────────────────────────────────
+// DM §3.2 — person record is a named container only. No structured data fields.
+
+model People {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id    String   @db.Uuid
+  name       String   @db.Text
+  status     String   @default("active") @db.Text
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  user                      User                      @relation(fields: [user_id], references: [id])
+  facts                     Fact[]
+  conversation_participants ConversationParticipant[]
+  edges_as_a                Edge[]                    @relation("EdgePersonA")
+  edges_as_b                Edge[]                    @relation("EdgePersonB")
+
+  @@index([user_id])
+  @@map("people")
+}
+
+// ─── Layer 2: Sources ─────────────────────────────────────────────────────────
+// DM §3.3 — one row per raw text submission. Never deleted.
+// kind enum: conversation, note, profile, observation (DM §4.1)
+// processing_status enum: pending, processing, complete, failed
+
+model Source {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id           String   @db.Uuid
+  kind              String   @db.Text
+  raw_text          String   @db.Text
+  date              DateTime @default(dbgenerated("CURRENT_DATE")) @db.Date
+  processing_status String   @default("pending") @db.Text
+  created_at        DateTime @default(now()) @db.Timestamptz(6)
+
+  user          User           @relation(fields: [user_id], references: [id])
+  facts         Fact[]
+  conversations Conversation[]
+  edges         Edge[]
+
+  @@index([user_id])
+  @@map("sources")
+}
+
+// ─── Layer 3: Conversations ───────────────────────────────────────────────────
+// DM §3.5 — first-class dated interactions. Not free text on person notes.
+
+model Conversation {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id    String   @db.Uuid
+  source_id  String   @db.Uuid
+  summary    String?  @db.Text
+  date       DateTime @db.Date
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  source       Source                    @relation(fields: [source_id], references: [id])
+  participants ConversationParticipant[]
+
+  @@map("conversations")
+}
+
+// ─── Layer 4: Conversation Participants ───────────────────────────────────────
+// DM §3.6 — many-to-many join between conversations and people
+
+model ConversationParticipant {
+  id              String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversation_id String @db.Uuid
+  person_id       String @db.Uuid
+
+  conversation Conversation @relation(fields: [conversation_id], references: [id])
+  person       People       @relation(fields: [person_id], references: [id])
+
+  @@unique([conversation_id, person_id])
+  @@index([person_id])
+  @@map("conversation_participants")
+}
+
+// ─── Layer 5: Facts ───────────────────────────────────────────────────────────
+// DM §3.4 — atomic unit of the vault. One claim per row. source_id never null.
+// type enum: role, org, location, interest, background, context, connection, quote (DM §4.2)
+// status enum: raw, confirmed, outdated (DM §4.3)
+
+model Fact {
+  id         String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  person_id  String                      @db.Uuid
+  source_id  String                      @db.Uuid
+  type       String                      @db.Text
+  value      String                      @db.Text
+  status     String                      @default("raw") @db.Text
+  embedding  Unsupported("vector(1536)")?
+  created_at DateTime                    @default(now()) @db.Timestamptz(6)
+
+  person People @relation(fields: [person_id], references: [id])
+  source Source @relation(fields: [source_id], references: [id])
+
+  @@index([person_id])
+  @@index([source_id])
+  @@index([status])
+  @@map("facts")
+}
+
+// ─── Layer 6: Edges ───────────────────────────────────────────────────────────
+// DM §3.7 — typed connections between two people. Undirected.
+// relationship_type enum: colleagues, co_investors, collaborators, introduced_by,
+//                         shared_interest, classmates, co_founders (DM §4.4)
+// status enum: inferred, confirmed (DM §4.5)
+
+model Edge {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id           String   @db.Uuid
+  person_a          String   @db.Uuid
+  person_b          String   @db.Uuid
+  relationship_type String   @db.Text
+  source_id         String   @db.Uuid
+  status            String   @default("inferred") @db.Text
+  created_at        DateTime @default(now()) @db.Timestamptz(6)
+
+  user    User   @relation(fields: [user_id], references: [id])
+  personA People @relation("EdgePersonA", fields: [person_a], references: [id])
+  personB People @relation("EdgePersonB", fields: [person_b], references: [id])
+  source  Source @relation(fields: [source_id], references: [id])
+
+  @@index([user_id])
+  @@index([person_a])
+  @@index([person_b])
+  @@index([status])
+  @@map("edges")
+}
