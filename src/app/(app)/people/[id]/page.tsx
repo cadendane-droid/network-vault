@@ -1,6 +1,7 @@
 import { auth } from '@clerk/nextjs/server';
 import { redirect, notFound } from 'next/navigation';
 import prisma from '@/lib/prisma';
+import { ProcessingIndicator } from '@/components/processing-indicator';
 
 async function getPersonProfile(personId: string, userId: string) {
   const person = await prisma.people.findUnique({
@@ -102,20 +103,16 @@ export default async function PersonProfilePage({
 
   const { person, factsByType, conversations, connections, latestSource } =
     data;
+  const processingStatus = latestSource?.processing_status ?? 'complete';
   const isProcessing =
-    latestSource?.processing_status === 'pending' ||
-    latestSource?.processing_status === 'processing';
+    processingStatus === 'pending' || processingStatus === 'processing';
 
   return (
     <div className="px-4 pt-6 pb-4 max-w-lg mx-auto space-y-6">
       {/* Header */}
       <div>
         <h1 className="text-2xl font-semibold text-zinc-900">{person.name}</h1>
-        {isProcessing && (
-          <p className="mt-1 text-sm text-zinc-500">
-            Extracting facts… this usually takes a few seconds.
-          </p>
-        )}
+        <ProcessingIndicator personId={id} initialStatus={processingStatus} />
       </div>
 
       {/* Facts by type */}
