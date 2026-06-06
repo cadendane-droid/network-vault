@@ -21,17 +21,25 @@ export async function retrieveContext(
   // 0.5 threshold — widened from 0.4 after testing showed semantically related
   // queries landing just outside 0.4. Tighten if query answers become noisy.
   // embedding IS NOT NULL guard handles facts written before the embed job ran.
-  const facts = await prisma.$queryRaw<ContextFact[]>`
-    SELECT f.value, f.type, f.status, p.name AS person_name
-    FROM facts f
-    JOIN people p ON f.person_id = p.id
-    WHERE p.user_id = ${userId}::uuid
-      AND f.status IN ('raw', 'confirmed')
-      AND f.embedding IS NOT NULL
-      AND f.embedding <=> ${vectorStr}::vector < 0.5
-    ORDER BY f.embedding <=> ${vectorStr}::vector ASC
-    LIMIT 20
-  `;
+  //
+  // $queryRawUnsafe is used instead of the $queryRaw tagged template because
+  // Prisma v7's template literal processor conflicts with PostgreSQL's ::
+  // cast operator when it immediately follows a $N placeholder. Passing SQL
+  // and parameters separately matches pg.query() directly and avoids this.
+  // $2 appears twice (WHERE and ORDER BY) — PostgreSQL supports parameter reuse.
+  const facts = await prisma.$queryRawUnsafe<ContextFact[]>(
+    `SELECT f.value, f.type, f.status, p.name AS person_name
+     FROM facts f
+     JOIN people p ON f.person_id = p.id
+     WHERE p.user_id = $1::uuid
+       AND f.status IN ('raw', 'confirmed')
+       AND f.embedding IS NOT NULL
+       AND f.embedding <=> $2::vector < 0.5
+     ORDER BY f.embedding <=> $2::vector ASC
+     LIMIT 20`,
+    userId,
+    vectorStr
+  );
 
   return facts;
 }
