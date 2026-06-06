@@ -91,6 +91,21 @@ export default function Chat() {
           return updated;
         });
       }
+
+      // Guard against a silent streamText failure: if the stream closed with
+      // done:true but the model never emitted any content, surface an error
+      // rather than leaving the user staring at a blank assistant bubble.
+      setMessages((prev) => {
+        const updated = [...prev];
+        const last = updated[updated.length - 1];
+        if (last?.role === 'assistant' && last.content === '') {
+          updated[updated.length - 1] = {
+            ...last,
+            content: 'Something went wrong — please try again.',
+          };
+        }
+        return updated;
+      });
     } catch {
       setMessages((prev) => {
         const updated = [...prev];
