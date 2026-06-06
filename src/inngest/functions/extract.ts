@@ -77,19 +77,29 @@ export const extractPersonFacts = inngest.createFunction(
     }
 
     // ── Step 4: Resolve person names → IDs ─────────────────────────────────
+    // Rule: only the primary person (submitted via the Add Person form and
+    // already created by POST /api/people) is guaranteed a vault row.
+    // Every other name Claude mentions — connections, participants, people
+    // referenced in edges — is looked up against existing vault members only.
+    // If the name is not already in the vault, it gets no entry in the map.
+    //
+    // Downstream effects (no code changes needed elsewhere):
+    //   • Step 5 already has `if (!factPersonId) continue` — facts about
+    //     unknown secondary people are skipped automatically.
+    //   • Step 6 already has `if (!aId || !bId) continue` — edges involving
+    //     unknown people are skipped automatically.
+    //   • Connection facts *about* the primary person (e.g. "Introduced me to
+    //     Marcus Webb") are written normally — person_name is the primary
+    //     person, so their ID resolves fine.
     const personIdMap = await step.run('resolve-people', async () => {
-      const allNames = new Set([
-        ...validFacts.map((f) => f.person_name),
-        ...validEdges.flatMap((e) => [e.person_a, e.person_b]),
-        ...(extraction.conversation?.participants ?? []),
-      ]);
-
-      // Seed with the primary person from the event
+      // Primary person is always in the map — their row exists from the form.
       const map: Record<string, string> = {
         [primaryPerson.name.toLowerCase()]: primaryPerson.id,
       };
 
-      // Fetch all existing people for this user to avoid duplicates
+      // Fetch all other existing vault members for this user and add them.
+      // Case-insensitive match via lowercased key — handles minor Claude
+      // capitalisation differences (e.g. "marcus webb" vs "Marcus Webb").
       const existing = await prisma.people.findMany({
         where: { user_id },
         select: { id: true, name: true },
@@ -98,18 +108,8 @@ export const extractPersonFacts = inngest.createFunction(
         map[p.name.toLowerCase()] = p.id;
       }
 
-      // Create rows for names not already in the vault
-      for (const name of allNames) {
-        const key = name.toLowerCase();
-        if (!map[key]) {
-          const created = await prisma.people.create({
-            data: { user_id, name },
-            select: { id: true },
-          });
-          map[key] = created.id;
-        }
-      }
-
+      // Names absent from the map at this point are simply not in the vault.
+      // No rows are created for them — they are ignored.
       return map;
     });
 
