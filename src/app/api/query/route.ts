@@ -33,7 +33,20 @@ export async function POST(request: NextRequest) {
   //   return NextResponse.json({ error: 'Query limit reached. Upgrade to Pro.' }, { status: 402 });
   // }
 
-  const facts = await retrieveContext(question.trim(), user.userId);
+  // Retrieval errors (DB connection, pgvector, embedding API) must be caught
+  // here — after this point the 200 header is committed and errors are silent.
+  let facts: Awaited<ReturnType<typeof retrieveContext>>;
+  try {
+    facts = await retrieveContext(question.trim(), user.userId);
+  } catch (err) {
+    console.error('[query] retrieveContext failed:', err);
+    return NextResponse.json(
+      {
+        error: 'Failed to retrieve context from your vault. Please try again.',
+      },
+      { status: 500 }
+    );
+  }
 
   const contextBlock =
     facts.length > 0
@@ -49,6 +62,12 @@ export async function POST(request: NextRequest) {
     system: QUERY_SYSTEM_PROMPT,
     messages: [{ role: 'user', content: userMessage }],
     maxOutputTokens: 1024,
+    // Log any model/API error that occurs after the stream has started.
+    // Without this, streamText swallows the error and closes the stream
+    // silently — the client sees an empty assistant bubble with no clue why.
+    onError: (event) => {
+      console.error('[query] streamText error:', event.error);
+    },
   });
 
   // toTextStreamResponse emits UTF-8 text deltas — simpler to consume
