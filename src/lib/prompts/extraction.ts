@@ -73,6 +73,8 @@ If a connection does not fit any value, use collaborators as the fallback.
 
 7. NEVER SET STATUS FIELDS. Do not include a status field on any fact or edge. The intake pipeline sets status automatically.
 
+8. PRIMARY SUBJECT ATTRIBUTION. Every input begins with a "Primary subject:" line that names the person the note is primarily about. You must use that exact name as the person_name for all facts about the primary subject. When pronouns (He, She, They, Him, Her, His, Hers, It, etc.) appear in the text and clearly refer to the primary subject, resolve them to the primary subject's full name in person_name. Never use a pronoun as a person_name value — if you cannot determine the full name, omit the fact rather than write a pronoun.
+
 ---
 
 ## Few-Shot Examples
@@ -80,6 +82,7 @@ If a connection does not fit any value, use collaborators as the fallback.
 ### Example 1 — conversation source
 
 Input:
+Primary subject: Sarah Chen
 Source kind: conversation
 Text: Had coffee with Sarah Chen this morning. She's a Partner at Andreessen Horowitz focused on climate tech investments. Based in San Francisco. We went to HBS together — she graduated in 2016. She mentioned her close friend Marcus Webb who's also in climate investing and they've co-invested on several deals. She said "the best climate deals right now look like hard science problems, not software." Want to follow up about a potential intro to her portfolio company Terraform.
 
@@ -89,6 +92,7 @@ Output:
 ### Example 2 — note source
 
 Input:
+Primary subject: James Park
 Source kind: note
 Text: Background on James Park. Runs product at Notion, been there since 2019. Previously 5 years at Google on the Google Docs team. Into productivity tools and async-first communication. He and David Kim used to work together at Google before James left.
 
@@ -98,6 +102,7 @@ Output:
 ### Example 3 — profile source
 
 Input:
+Primary subject: Priya Nair
 Source kind: profile
 Text: LinkedIn bio for Priya Nair. Co-founder and CEO of Helios Energy, a Series B climate startup headquartered in Austin, TX. PhD in Physics from MIT, 2016. Previously a researcher at NREL for three years. Passionate about grid-scale energy storage and battery technology.
 

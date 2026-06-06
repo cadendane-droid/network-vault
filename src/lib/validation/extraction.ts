@@ -11,6 +11,24 @@ const VALID_FACT_TYPES = new Set([
   'quote',
 ]);
 
+// Standalone pronouns that must never appear as person_name / person_a / person_b.
+// These indicate Claude attributed a fact to a pronoun instead of resolving it
+// to the primary subject's real name — the result would be a ghost people row.
+const STANDALONE_PRONOUNS = new Set([
+  'he',
+  'she',
+  'they',
+  'it',
+  'him',
+  'her',
+  'them',
+  'his',
+  'hers',
+  'their',
+  'theirs',
+  'its',
+]);
+
 const VALID_RELATIONSHIP_TYPES = new Set([
   'colleagues',
   'co_investors',
@@ -51,6 +69,17 @@ export function validateExtractionOutput(
       invalid.push({
         item: f,
         reason: 'missing required field: person_name, type, or value',
+      });
+      continue;
+    }
+
+    // Pronoun guard: reject facts where person_name is a standalone pronoun.
+    // These are ghost rows caused by Claude attributing a fact to "He" or "She"
+    // instead of resolving to the primary subject's real name.
+    if (STANDALONE_PRONOUNS.has(f.person_name.trim().toLowerCase())) {
+      invalid.push({
+        item: f,
+        reason: `person_name "${f.person_name}" is a pronoun — must be resolved to a full name`,
       });
       continue;
     }
@@ -98,6 +127,18 @@ export function validateExtractionOutput(
         item: e,
         reason:
           'missing required field: person_a, person_b, or relationship_type',
+      });
+      continue;
+    }
+
+    // Pronoun guard: reject edges where either party is a standalone pronoun.
+    if (
+      STANDALONE_PRONOUNS.has(e.person_a.trim().toLowerCase()) ||
+      STANDALONE_PRONOUNS.has(e.person_b.trim().toLowerCase())
+    ) {
+      invalid.push({
+        item: e,
+        reason: `edge contains a pronoun as person_a or person_b — must be a full name`,
       });
       continue;
     }

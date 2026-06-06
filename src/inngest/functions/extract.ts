@@ -52,7 +52,8 @@ export const extractPersonFacts = inngest.createFunction(
         extractFromSource(
           source.raw_text,
           source.kind as SourceKind,
-          EXTRACTION_SYSTEM_PROMPT
+          EXTRACTION_SYSTEM_PROMPT,
+          primaryPerson.name // lets Claude resolve pronouns to the right name
         )
       );
     } catch (err) {

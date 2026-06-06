@@ -34,8 +34,16 @@ export interface ExtractionResult {
 export async function extractFromSource(
   rawText: string,
   sourceKind: SourceKind,
-  systemPrompt: string
+  systemPrompt: string,
+  // When provided, prepended as "Primary subject: <name>" so Claude knows
+  // who pronouns (He, She, They…) in the text refer to. Injected into the
+  // user message rather than the system prompt to preserve prompt caching.
+  primaryPersonName?: string
 ): Promise<ExtractionResult> {
+  const primarySubjectLine = primaryPersonName
+    ? `Primary subject: ${primaryPersonName}\n\n`
+    : '';
+
   const message = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 4096,
@@ -43,7 +51,7 @@ export async function extractFromSource(
     messages: [
       {
         role: 'user',
-        content: `Source kind: ${sourceKind}\n\nText:\n${rawText}`,
+        content: `${primarySubjectLine}Source kind: ${sourceKind}\n\nText:\n${rawText}`,
       },
     ],
   });
