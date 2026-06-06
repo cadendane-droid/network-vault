@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import stripe from '@/lib/stripe';
+import { getStripe } from '@/lib/stripe';
 import prisma from '@/lib/prisma';
 import { getAuthenticatedUser } from '@/lib/auth';
 
@@ -30,6 +30,7 @@ export async function POST(request: NextRequest) {
 
   // Find or create the Stripe customer for this user. We store the ID in
   // the DB so future webhooks can map Stripe customer → our user row.
+  const stripe = getStripe();
   let stripeCustomerId = dbUser.stripe_customer_id;
   if (!stripeCustomerId) {
     const customer = await stripe.customers.create({

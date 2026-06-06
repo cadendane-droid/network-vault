@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type Stripe from 'stripe';
-import stripeClient from '@/lib/stripe';
+import { getStripe } from '@/lib/stripe';
 import prisma from '@/lib/prisma';
 
 // Stripe sends the raw body for signature verification. Next.js App Router
@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
 
   let event: Stripe.Event;
   try {
-    event = stripeClient.webhooks.constructEvent(
+    event = getStripe().webhooks.constructEvent(
       rawBody,
       signature,
       process.env.STRIPE_WEBHOOK_SECRET!

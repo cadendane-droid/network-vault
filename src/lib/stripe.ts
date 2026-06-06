@@ -1,8 +1,16 @@
 import Stripe from 'stripe';
 
-// Singleton Stripe client. Uses the server-only secret key — never expose
-// this to the client bundle. The apiVersion is pinned so behaviour doesn't
-// change when Stripe releases a new default.
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+// Lazily-initialised singleton. The client is only created when getStripe()
+// is first called inside a route handler at runtime — never at module import
+// time during the Next.js build, when STRIPE_SECRET_KEY isn't available.
+let _instance: Stripe | null = null;
 
-export default stripe;
+export function getStripe(): Stripe {
+  if (!_instance) {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      throw new Error('STRIPE_SECRET_KEY environment variable is not set');
+    }
+    _instance = new Stripe(process.env.STRIPE_SECRET_KEY);
+  }
+  return _instance;
+}
