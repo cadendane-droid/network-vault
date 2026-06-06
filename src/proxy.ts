@@ -4,7 +4,8 @@ const isPublicRoute = createRouteMatcher([
   '/',
   '/sign-in(.*)',
   '/sign-up(.*)',
-  '/api/inngest', // Inngest sync and event delivery — must be public, secured by INNGEST_SIGNING_KEY
+  '/api/inngest', // Inngest sync and event delivery — secured by INNGEST_SIGNING_KEY
+  '/api/webhooks/stripe', // Stripe webhooks — secured by STRIPE_WEBHOOK_SECRET signature check
 ]);
 
 export default clerkMiddleware(async (auth, request) => {

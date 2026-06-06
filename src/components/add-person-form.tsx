@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
 const SOURCE_KINDS = [
@@ -23,6 +24,7 @@ export default function AddPersonForm() {
   const [rawText, setRawText] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [limitReached, setLimitReached] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -42,6 +44,12 @@ export default function AddPersonForm() {
       });
 
       if (!res.ok) {
+        // 402 = free-tier limit hit — show upgrade prompt instead of generic error.
+        if (res.status === 402) {
+          setLimitReached(true);
+          setSubmitting(false);
+          return;
+        }
         const data = await res.json().catch(() => ({}));
         setError((data as { error?: string }).error ?? 'Something went wrong.');
         setSubmitting(false);
@@ -133,8 +141,26 @@ export default function AddPersonForm() {
         />
       </div>
 
-      {/* Error */}
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {/* Limit reached (402) — upgrade prompt */}
+      {limitReached && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+          <p className="text-sm text-amber-800">
+            You&apos;ve reached the 25-person limit on the free plan.{' '}
+            <Link
+              href="/account"
+              className="font-semibold underline underline-offset-2 hover:text-amber-900"
+            >
+              Upgrade to Pro
+            </Link>{' '}
+            to add unlimited people.
+          </p>
+        </div>
+      )}
+
+      {/* Generic error */}
+      {error && !limitReached && (
+        <p className="text-sm text-red-600">{error}</p>
+      )}
 
       {/* Submit */}
       <button

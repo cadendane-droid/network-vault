@@ -25,6 +25,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
+  // Free-tier limit: 25 people maximum (active + archived both count).
+  // Pro users have no limit. Check before validation so the error is clear.
+  if (user.plan === 'free') {
+    const peopleCount = await prisma.people.count({
+      where: { user_id: user.userId },
+    });
+    if (peopleCount >= 25) {
+      return NextResponse.json(
+        {
+          error:
+            'Free plan limit reached (25 people). Upgrade to Pro to add unlimited people.',
+        },
+        { status: 402 }
+      );
+    }
+  }
+
   const { name, raw_text, source_kind, source_date } = body as Record<
     string,
     unknown
