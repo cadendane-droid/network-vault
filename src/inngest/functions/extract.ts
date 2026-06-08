@@ -3,6 +3,7 @@ import prisma from '@/lib/prisma';
 import { extractFromSource, type SourceKind } from '@/lib/claude';
 import { EXTRACTION_SYSTEM_PROMPT } from '@/lib/prompts/extraction';
 import { validateExtractionOutput } from '@/lib/validation/extraction';
+import { invalidateContext } from '@/lib/vault-cache';
 
 export const extractPersonFacts = inngest.createFunction(
   {
@@ -220,6 +221,10 @@ export const extractPersonFacts = inngest.createFunction(
       name: 'vault/facts.extracted',
       data: { source_id, user_id },
     });
+
+    // Invalidate the vault context cache so the next query reflects the
+    // newly extracted facts. This is a synchronous Map.delete — no step needed.
+    invalidateContext(user_id);
 
     return { person_id, source_id, factsWritten, edgesWritten };
   }

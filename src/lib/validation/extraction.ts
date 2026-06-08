@@ -9,6 +9,16 @@ const VALID_FACT_TYPES = new Set([
   'context',
   'connection',
   'quote',
+  'life_situation',
+  'religion',
+  'contact_info',
+  'personality',
+  'values',
+  'skills',
+  'needs',
+  'future_plans',
+  'dates',
+  'miscellaneous',
 ]);
 
 // Standalone pronouns that must never appear as person_name / person_a / person_b.
@@ -37,6 +47,8 @@ const VALID_RELATIONSHIP_TYPES = new Set([
   'shared_interest',
   'classmates',
   'co_founders',
+  'friends',
+  'siblings',
 ]);
 
 export interface InvalidItem {

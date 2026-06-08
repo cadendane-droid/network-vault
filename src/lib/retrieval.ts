@@ -1,6 +1,10 @@
-import Anthropic from '@anthropic-ai/sdk';
-import prisma from '@/lib/prisma';
-import { embedText } from '@/lib/claude';
+// retrieveContext has been superseded by buildVaultContext in
+// src/lib/vault-context.ts, which sends the user's full vault to Claude on
+// every query (prompt-cached via cache_control: ephemeral).
+//
+// This file is retained in case a hybrid approach is needed later — e.g.
+// pgvector pre-filtering for very large vaults where full-context becomes
+// too expensive. Do not delete.
 
 export interface ContextFact {
   value: string;
@@ -9,6 +13,16 @@ export interface ContextFact {
   person_name: string;
 }
 
+/* ── PRESERVED BUT INACTIVE ─────────────────────────────────────────────────
+ *
+ * To reactivate: uncomment the block below, restore the imports at the top
+ * of this file, and import retrieveContext into src/app/api/query/route.ts.
+ *
+ * Required imports (add back to top of file when reactivating):
+ *   import Anthropic from '@anthropic-ai/sdk';
+ *   import prisma from '@/lib/prisma';
+ *   import { embedText } from '@/lib/claude';
+ *
 interface ContextFactWithId extends ContextFact {
   id: string;
 }
@@ -138,3 +152,4 @@ export async function retrieveContext(
 
   return merged;
 }
+ * ─────────────────────────────────────────────────────────────────────────── */

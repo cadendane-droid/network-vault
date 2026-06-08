@@ -81,6 +81,16 @@ const TYPE_LABELS: Record<string, string> = {
   context: 'How you know them',
   connection: 'Connections',
   quote: 'Quotes',
+  life_situation: 'Life situation',
+  religion: 'Religion',
+  contact_info: 'Contact info',
+  personality: 'Personality',
+  values: 'Values',
+  skills: 'Skills',
+  needs: 'Needs',
+  future_plans: 'Future plans',
+  dates: 'Important dates',
+  miscellaneous: 'Notes',
 };
 
 export default async function PersonProfilePage({

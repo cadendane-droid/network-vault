@@ -17,7 +17,7 @@ Return exactly this JSON structure:
   "facts": [
     {
       "person_name": "Full Name",
-      "type": "role | org | location | interest | background | context | connection | quote",
+      "type": "role | org | location | interest | background | context | connection | quote | life_situation | religion | contact_info | personality | values | skills | needs | future_plans | dates | miscellaneous",
       "value": "single concise claim"
     }
   ],
@@ -25,7 +25,7 @@ Return exactly this JSON structure:
     {
       "person_a": "Full Name",
       "person_b": "Full Name",
-      "relationship_type": "colleagues | co_investors | collaborators | introduced_by | shared_interest | classmates | co_founders"
+      "relationship_type": "colleagues | co_investors | collaborators | introduced_by | shared_interest | classmates | co_founders | friends | siblings"
     }
   ]
 }
@@ -34,24 +34,36 @@ Return exactly this JSON structure:
 
 ## Enum Contracts
 
-facts.type — use exactly one of these values:
-- role         Current job title or position (e.g. "Partner", "CEO")
-- org          Organisation the person is associated with (e.g. "Andreessen Horowitz")
-- location     City, region, or country of primary base (e.g. "San Francisco, CA")
-- interest     Professional or personal interest or focus area (e.g. "Climate tech investing")
-- background   Past role, education, or career history (e.g. "MBA, Harvard Business School 2015")
-- context      How the user knows this person, shared history (e.g. "Met at SxSW 2025 via Priya")
-- connection   Named link to another person (e.g. "Co-invests with Marcus Webb"). Always paired with an edge.
-- quote        Verbatim or near-verbatim statement. Only valid for conversation sources.
+facts.type — use exactly one of these 18 values:
+- role            Current job title or position (e.g. "Partner", "CEO")
+- org             Organisation the person is associated with (e.g. "Andreessen Horowitz")
+- location        City, region, or country of primary base (e.g. "San Francisco, CA")
+- interest        Professional or personal interest or passion (e.g. "Climate tech investing")
+- background      Past role, education, or career history (e.g. "MBA, Harvard Business School 2015")
+- context         How the user knows this person, shared history (e.g. "Met at SxSW 2025 via Priya")
+- connection      Named link to another person in the vault; triggers edge creation. Always paired with an edge.
+- quote           Verbatim or near-verbatim statement. Only valid for conversation sources.
+- life_situation  Current personal life circumstances (e.g. "Recently had a baby", "Going through a career transition")
+- religion        Religious or spiritual affiliation, if voluntarily shared (e.g. "Muslim", "Practising Catholic")
+- contact_info    Phone, email, social handle, or other contact detail (e.g. "@sarahchen on X", "sarah@a16z.com")
+- personality     Observable personality traits or communication style (e.g. "Very direct communicator", "Deeply empathetic")
+- values          Core values or ethical principles the person has expressed (e.g. "Believes strongly in open-source")
+- skills          Specific professional or technical skills (e.g. "Expert in Rust", "Strong public speaker")
+- needs           Something the person is actively seeking or struggling with (e.g. "Looking for a co-founder", "Hiring senior engineers")
+- future_plans    Goals or ambitions the person has shared (e.g. "Wants to start a fund in 2026", "Planning to move to NYC")
+- dates           Important dates to remember (e.g. "Birthday: March 14", "Work anniversary: June 2020")
+- miscellaneous   Any noteworthy fact that does not fit another category
 
-edges.relationship_type — use exactly one of these values:
+edges.relationship_type — use exactly one of these 9 values:
 - colleagues       Work or worked at the same organisation
 - co_investors     Have invested together in the same deal or fund
-- collaborators    Worked together on a project not covered by other types
+- collaborators    Worked together on a project or initiative (use as fallback when no other type fits)
 - introduced_by    One person introduced the vault owner to the other
 - shared_interest  Both people share a tagged interest (computed separately — do not use this type)
 - classmates       Attended the same institution at the same time
 - co_founders      Founded a company together
+- friends          Personal friendship independent of professional context
+- siblings         Are brothers, sisters, or otherwise siblings
 
 If a connection does not fit any value, use collaborators as the fallback.
 
