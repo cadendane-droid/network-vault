@@ -4,6 +4,7 @@ interface PersonCardProps {
   id: string;
   name: string;
   confirmed_fact_count: number;
+  is_processing: boolean;
   status: string;
   created_at: Date;
 }
@@ -12,6 +13,7 @@ export default function PersonCard({
   id,
   name,
   confirmed_fact_count,
+  is_processing,
   status,
 }: PersonCardProps) {
   return (
@@ -23,9 +25,9 @@ export default function PersonCard({
         <span className="text-base font-medium text-zinc-900">{name}</span>
         <span className="text-sm text-zinc-400">
           {status === 'active'
-            ? confirmed_fact_count > 0
-              ? `${confirmed_fact_count} confirmed fact${confirmed_fact_count === 1 ? '' : 's'}`
-              : 'Processing…'
+            ? is_processing
+              ? 'Processing…'
+              : `${confirmed_fact_count} confirmed fact${confirmed_fact_count === 1 ? '' : 's'}`
             : 'Archived'}
         </span>
       </div>

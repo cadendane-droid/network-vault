@@ -18,6 +18,11 @@ async function getPeople(userId: string) {
           facts: { where: { status: 'confirmed' } },
         },
       },
+      facts: {
+        where: { status: { in: ['raw', 'confirmed'] } },
+        take: 1,
+        select: { id: true },
+      },
     },
   });
 
@@ -27,6 +32,7 @@ async function getPeople(userId: string) {
     status: p.status,
     created_at: p.created_at,
     confirmed_fact_count: p._count.facts,
+    is_processing: p.facts.length === 0,
   }));
 }
 
