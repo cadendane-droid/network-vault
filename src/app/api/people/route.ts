@@ -25,23 +25,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  // Free-tier limit: 25 people maximum (active + archived both count).
-  // Pro users have no limit. Check before validation so the error is clear.
-  if (user.plan === 'free') {
-    const peopleCount = await prisma.people.count({
-      where: { user_id: user.userId },
-    });
-    if (peopleCount >= 25) {
-      return NextResponse.json(
-        {
-          error:
-            'Free plan limit reached (25 people). Upgrade to Pro to add unlimited people.',
-        },
-        { status: 402 }
-      );
-    }
-  }
-
   const { name, raw_text, source_kind, source_date } = body as Record<
     string,
     unknown
@@ -68,15 +51,36 @@ export async function POST(request: NextRequest) {
       ? new Date(source_date)
       : new Date();
 
-  const { person, source } = await prisma.$transaction(async (tx) => {
-    const person = await tx.people.create({
-      data: {
-        user_id: user.userId,
-        name: name.trim(),
-      },
-    });
+  const existingPerson = await prisma.people.findFirst({
+    where: {
+      user_id: user.userId,
+      name: { equals: name.trim(), mode: 'insensitive' },
+    },
+    select: { id: true },
+  });
 
-    const source = await tx.source.create({
+  // Free-tier limit only applies when a new people row would be created.
+  if (!existingPerson && user.plan === 'free') {
+    const peopleCount = await prisma.people.count({
+      where: { user_id: user.userId },
+    });
+    if (peopleCount >= 25) {
+      return NextResponse.json(
+        {
+          error:
+            'Free plan limit reached (25 people). Upgrade to Pro to add unlimited people.',
+        },
+        { status: 402 }
+      );
+    }
+  }
+
+  let personId: string;
+  let sourceId: string;
+
+  if (existingPerson) {
+    personId = existingPerson.id;
+    const source = await prisma.source.create({
       data: {
         user_id: user.userId,
         kind: source_kind,
@@ -84,27 +88,46 @@ export async function POST(request: NextRequest) {
         date,
       },
     });
-
-    return { person, source };
-  });
+    sourceId = source.id;
+  } else {
+    const { person, source } = await prisma.$transaction(async (tx) => {
+      const person = await tx.people.create({
+        data: {
+          user_id: user.userId,
+          name: name.trim(),
+        },
+      });
+      const source = await tx.source.create({
+        data: {
+          user_id: user.userId,
+          kind: source_kind,
+          raw_text: raw_text.trim(),
+          date,
+        },
+      });
+      return { person, source };
+    });
+    personId = person.id;
+    sourceId = source.id;
+  }
 
   await prisma.source.update({
-    where: { id: source.id },
+    where: { id: sourceId },
     data: { processing_status: 'processing' },
   });
 
   await inngest.send({
     name: 'vault/person.created',
     data: {
-      person_id: person.id,
-      source_id: source.id,
+      person_id: personId,
+      source_id: sourceId,
       user_id: user.userId,
     },
   });
 
   return NextResponse.json(
-    { person_id: person.id, source_id: source.id },
-    { status: 202 }
+    { person_id: personId, source_id: sourceId },
+    { status: 201 }
   );
 }
 
