@@ -19,8 +19,14 @@ export default async function QueryPage() {
   });
 
   return (
-    // Fill available height between top of viewport and nav (pb-16 from layout)
-    <div className="h-[calc(100dvh-4rem)]">
+    <div
+      style={{
+        height: 'calc(100dvh - var(--nav-height))',
+        background: 'var(--surface-canvas)',
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
       {peopleCount === 0 ? <EmptyVaultQuery /> : <Chat />}
     </div>
   );

@@ -19,22 +19,81 @@ export default async function NetworkPage() {
     where: { user_id: dbUser.id, status: 'active' },
   });
 
-  // The graph needs at least two nodes to be meaningful. Show a guided
-  // empty state rather than rendering a graph with a single isolated node.
+  // The graph needs at least two nodes to be meaningful.
   if (peopleCount < 2) {
     return (
-      <div className="flex flex-col items-center justify-center h-[calc(100dvh-4rem)] bg-zinc-950 px-6 text-center">
-        <div className="mb-5 flex gap-2">
-          {/* Decorative constellation dots */}
-          <span className="h-2.5 w-2.5 rounded-full bg-violet-600 opacity-80" />
-          <span className="h-2.5 w-2.5 rounded-full bg-zinc-600 opacity-60 translate-y-1" />
-          <span className="h-2.5 w-2.5 rounded-full bg-violet-500 opacity-50 -translate-y-0.5" />
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: 'calc(100dvh - var(--nav-height))',
+          background:
+            'radial-gradient(ellipse at center, var(--night-800) 0%, var(--night-900) 100%)',
+          padding: '0 var(--gutter)',
+          textAlign: 'center',
+        }}
+      >
+        {/* Decorative constellation dots */}
+        <div style={{ display: 'flex', gap: 10, marginBottom: 24 }}>
+          <span
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: '50%',
+              background: 'var(--terracotta-300)',
+              opacity: 0.8,
+              display: 'inline-block',
+            }}
+          />
+          <span
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: '50%',
+              background: 'var(--star-dim)',
+              opacity: 0.6,
+              display: 'inline-block',
+              transform: 'translateY(4px)',
+            }}
+          />
+          <span
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: '50%',
+              background: 'var(--plum-300)',
+              opacity: 0.5,
+              display: 'inline-block',
+              transform: 'translateY(-2px)',
+            }}
+          />
         </div>
 
-        <h1 className="text-lg font-semibold text-white mb-2">
+        <h1
+          style={{
+            fontFamily: 'var(--font-display)',
+            fontSize: 'var(--text-h2)',
+            fontWeight: 600,
+            color: 'var(--text-on-night)',
+            margin: '0 0 10px',
+            letterSpacing: 'var(--tracking-tight)',
+          }}
+        >
           Your constellation is empty
         </h1>
-        <p className="text-sm text-zinc-400 max-w-xs mb-6 leading-relaxed">
+
+        <p
+          style={{
+            fontFamily: 'var(--font-sans)',
+            fontSize: 'var(--text-sm)',
+            color: 'var(--star-dim)',
+            maxWidth: 280,
+            margin: '0 0 28px',
+            lineHeight: 'var(--leading-normal)',
+          }}
+        >
           Add at least two people to see how your network connects. Each person
           becomes a node; shared context and relationships become the edges
           between them.
@@ -42,7 +101,19 @@ export default async function NetworkPage() {
 
         <Link
           href="/people/new"
-          className="rounded-full bg-violet-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-violet-500 transition-colors"
+          style={{
+            display: 'inline-block',
+            background: 'var(--brand)',
+            color: 'var(--text-on-accent)',
+            borderRadius: 'var(--radius-pill)',
+            padding: '11px 28px',
+            fontFamily: 'var(--font-sans)',
+            fontSize: 'var(--text-sm)',
+            fontWeight: 600,
+            textDecoration: 'none',
+            boxShadow: 'var(--shadow-md), var(--glow-brand)',
+            transition: `background var(--dur-fast)`,
+          }}
         >
           {peopleCount === 0 ? 'Add your first person' : 'Add another person'}
         </Link>
@@ -50,7 +121,14 @@ export default async function NetworkPage() {
         {peopleCount === 1 && (
           <Link
             href="/people"
-            className="mt-3 text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
+            style={{
+              marginTop: 14,
+              fontFamily: 'var(--font-sans)',
+              fontSize: 'var(--text-sm)',
+              color: 'var(--star-dim)',
+              textDecoration: 'none',
+              display: 'block',
+            }}
           >
             View people
           </Link>
@@ -59,10 +137,8 @@ export default async function NetworkPage() {
     );
   }
 
-  // Full-screen graph — height accounts for the fixed bottom nav (4rem).
-  // Constellation handles its own loading state for the client-side data fetch.
   return (
-    <div className="h-[calc(100dvh-4rem)]">
+    <div style={{ height: 'calc(100dvh - var(--nav-height))' }}>
       <Constellation />
     </div>
   );

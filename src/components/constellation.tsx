@@ -5,8 +5,7 @@ import Link from 'next/link';
 import dynamic from 'next/dynamic';
 
 // Dynamic import required — react-force-graph-2d accesses window, canvas, and
-// requestAnimationFrame at module load time. Importing it directly (or without
-// ssr: false) throws "window is not defined" during Next.js server render.
+// requestAnimationFrame at module load time.
 const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), {
   ssr: false,
   loading: () => null,
@@ -23,14 +22,11 @@ export interface GraphNode {
   hasConfirmedFacts: boolean;
   role: string | null;
   org: string | null;
-  // Added by the force simulation after first render
   x?: number;
   y?: number;
 }
 
 export interface GraphLink {
-  // Before the simulation resolves IDs these are strings;
-  // after resolution the library replaces them with node objects.
   source: string | GraphNode;
   target: string | GraphNode;
   relationship_type: string;
@@ -38,11 +34,48 @@ export interface GraphLink {
 }
 
 // ---------------------------------------------------------------------------
+// Design tokens — hex/rgba equivalents for canvas context (no CSS vars there)
+// ---------------------------------------------------------------------------
+
+// night-900 oklch(0.205 0.022 322) ≈ #211826
+const BG_NIGHT = '#211826';
+
+// Five palette colors for nodes
+// bright (-500 tones): terracotta, amber, sage, berry, plum
+const NODE_BRIGHT = [
+  '#B85030',
+  '#D4A01A',
+  '#5A9970',
+  '#B84860',
+  '#8060A0',
+] as const;
+// dim (-300 tones): for raw-only nodes
+const NODE_DIM = [
+  '#D4907A',
+  '#E0C070',
+  '#8ABE98',
+  '#D490A0',
+  '#B09AC8',
+] as const;
+
+// star-dim oklch(0.720 0.030 80) ≈ #C9B88A
+// night-600 oklch(0.420 0.032 316) ≈ #554068
+const EDGE_CONFIRMED = 'rgba(201, 184, 138, 0.6)'; // star-dim @ 60%
+const EDGE_INFERRED = 'rgba(85, 64, 104, 0.8)'; // night-600 @ 80%
+const LABEL_COLOR = '#C9B88A'; // star-dim
+
+// Assign a palette index by name hash (same algorithm as person-card.tsx)
+function paletteIdx(name: string): number {
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) | 0;
+  return Math.abs(h) % 5;
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
 interface Props {
-  /** Called when the user clicks a node. Receives the node's person id. */
   onNodeClick?: (personId: string) => void;
 }
 
@@ -58,8 +91,7 @@ export default function Constellation({ onNodeClick }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
 
-  // Measure the container so the graph fills its parent precisely without
-  // overflowing or causing scroll. Responds to window/layout resizes.
+  // Measure container
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -71,17 +103,15 @@ export default function Constellation({ onNodeClick }: Props) {
     return () => observer.disconnect();
   }, []);
 
-  // Apply link spring strength and distance via d3Force — neither is a typed
-  // prop on this version of react-force-graph-2d. Runs once after mount;
-  // affects all simulation ticks during cooldown and user interaction.
+  // Apply link spring strength and distance via d3Force (not typed direct props)
   useEffect(() => {
     const link = fgRef.current?.d3Force('link');
     if (!link) return;
-    link.strength(0.7); // pulls connected nodes along when a neighbour moves
-    link.distance(60); // moderate rest length between connected nodes
+    link.strength(0.7);
+    link.distance(60);
   }, []);
 
-  // Fetch graph data once on mount.
+  // Fetch graph data
   useEffect(() => {
     fetch('/api/graph')
       .then((res) => {
@@ -93,29 +123,64 @@ export default function Constellation({ onNodeClick }: Props) {
       })
       .then(({ nodes: n, edges: e }) => {
         setNodes(n);
-        setLinks(e); // API field is 'edges'; the library expects 'links'
+        setLinks(e);
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
 
-  // Stable reference — the force library mutates node/link objects in-place
-  // (adding x, y, vx, vy). A new graphData object every render would restart
-  // the simulation, so we memoize and only rebuild when the data changes.
   const graphData = useMemo(() => ({ nodes, links }), [nodes, links]);
 
   return (
-    <div ref={containerRef} className="w-full h-full bg-zinc-950">
-      {/* Client-side fetch loading state */}
+    <div
+      ref={containerRef}
+      style={{
+        width: '100%',
+        height: '100%',
+        background: `radial-gradient(ellipse at center, #2E2035 0%, ${BG_NIGHT} 100%)`,
+      }}
+    >
+      {/* Loading state */}
       {loading && (
-        <div className="flex items-center justify-center h-full">
-          <div className="flex flex-col items-center gap-3">
-            <div className="flex gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-zinc-500 animate-bounce [animation-delay:-0.3s]" />
-              <span className="h-2 w-2 rounded-full bg-zinc-500 animate-bounce [animation-delay:-0.15s]" />
-              <span className="h-2 w-2 rounded-full bg-zinc-500 animate-bounce" />
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: '100%',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 14,
+            }}
+          >
+            <div style={{ display: 'flex', gap: 6 }}>
+              {[0, 1, 2].map((i) => (
+                <span
+                  key={i}
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    background: LABEL_COLOR,
+                    display: 'inline-block',
+                    animation: `nvbounce 1.2s ease-in-out ${i * 0.15}s infinite`,
+                    opacity: 0.7,
+                  }}
+                />
+              ))}
             </div>
-            <p className="text-sm text-zinc-500">
+            <p
+              style={{
+                fontFamily: 'var(--font-sans)',
+                fontSize: 'var(--text-sm)',
+                color: 'var(--star-dim)',
+              }}
+            >
               Loading your network&hellip;
             </p>
           </div>
@@ -124,76 +189,94 @@ export default function Constellation({ onNodeClick }: Props) {
 
       {/* Fetch error */}
       {error && (
-        <div className="flex items-center justify-center h-full">
-          <p className="text-sm text-red-400">{error}</p>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: '100%',
+          }}
+        >
+          <p
+            style={{
+              fontFamily: 'var(--font-sans)',
+              fontSize: 'var(--text-sm)',
+              color: 'var(--berry-300)',
+            }}
+          >
+            {error}
+          </p>
         </div>
       )}
 
-      {/* Graph — only rendered once dimensions are known and data is ready */}
+      {/* Graph */}
       {!loading && !error && dimensions.width > 0 && (
         <ForceGraph2D
           graphData={graphData}
           width={dimensions.width}
           height={dimensions.height}
-          backgroundColor="#09090b" // zinc-950 — the constellation dark background
-          // Node colour: purple for confirmed facts, zinc gray for raw only.
-          nodeColor={(node) =>
-            (node as GraphNode).hasConfirmedFacts ? '#7c3aed' : '#71717a'
-          }
-          // Node size proportional to fact count.
-          // Library radius formula: sqrt(nodeVal) * nodeRelSize.
-          // nodeRelSize=1 (overrides the library default of 4).
-          // nodeVal range 4–25 → radius 2–5 px.
-          // Adding 4 ensures zero-fact nodes still render at minimum size.
+          backgroundColor={BG_NIGHT}
+          // Node color: bright for confirmed facts, dim for raw-only
+          nodeColor={(node) => {
+            const n = node as GraphNode;
+            const idx = paletteIdx(n.name);
+            return n.hasConfirmedFacts ? NODE_BRIGHT[idx] : NODE_DIM[idx];
+          }}
+          // Node size proportional to fact count
+          // Library radius formula: sqrt(nodeVal) * nodeRelSize
+          // nodeRelSize=1 → nodeVal 4–25 → radius 2–5 px
           nodeRelSize={1}
           nodeVal={(node) =>
             Math.max(4, Math.min(25, (node as GraphNode).factCount + 4))
           }
-          // Node label: native tooltip on hover (always) + canvas text at zoom > 1.5.
           nodeLabel="name"
           nodeCanvasObjectMode={() => 'after'}
           nodeCanvasObject={(node, ctx, globalScale) => {
-            // Only draw text labels when zoomed in past the threshold.
             if (globalScale < 1.5) return;
             const n = node as GraphNode;
             if (n.x == null || n.y == null) return;
 
-            // Mirror the nodeVal clamping so the label sits just below the node.
             const val = Math.max(4, Math.min(25, n.factCount + 4));
-            const radius = Math.sqrt(val) * 1; // nodeRelSize = 1
+            const radius = Math.sqrt(val) * 1;
 
-            // Scale font inversely with zoom so apparent size stays constant.
+            // Node glow when selected
+            if (selectedNode?.id === n.id) {
+              ctx.save();
+              ctx.shadowColor = NODE_BRIGHT[paletteIdx(n.name)];
+              ctx.shadowBlur = 12;
+              ctx.beginPath();
+              ctx.arc(n.x, n.y, radius + 1, 0, 2 * Math.PI);
+              ctx.fillStyle = NODE_BRIGHT[paletteIdx(n.name)];
+              ctx.fill();
+              ctx.restore();
+            }
+
             const fontSize = 11 / globalScale;
-            ctx.font = `${fontSize}px system-ui, sans-serif`;
+            ctx.font = `${fontSize}px "Hanken Grotesk", sans-serif`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'top';
-            ctx.fillStyle = '#e4e4e7'; // zinc-200
+            ctx.fillStyle = LABEL_COLOR;
             ctx.fillText(n.name, n.x, n.y + radius + 2);
           }}
-          // Edge colour, width, and style.
-          linkColor={() => '#52525b'} // zinc-600
+          // Edge styling — confirmed vs inferred
+          linkColor={(link) =>
+            (link as GraphLink).status === 'inferred'
+              ? EDGE_INFERRED
+              : EDGE_CONFIRMED
+          }
           linkWidth={1.5}
-          // Solid for confirmed connections; dashed for inferred.
           linkLineDash={(link) =>
             (link as GraphLink).status === 'inferred' ? [4, 4] : null
           }
-          // Relationship type shown as tooltip on edge hover.
           linkLabel={(link) =>
             (link as GraphLink).relationship_type.replace(/_/g, ' ')
           }
-          // Physics — tuned for an elastic, interconnected feel.
-          // linkStrength (0.7) is applied via fgRef d3Force in a useEffect above
-          // because it isn't a direct prop on this library version.
-          // Lower alphaDecay keeps the simulation warm longer for better settling.
-          // Lower velocityDecay reduces damping so nodes carry momentum.
-          // Longer warmup lets the layout settle before first render.
+          // Physics — unchanged from previous session
           ref={fgRef}
           d3AlphaDecay={0.02}
           d3VelocityDecay={0.2}
           warmupTicks={100}
           cooldownTicks={200}
-          // Node click — open the bottom sheet. The sheet's "View profile"
-          // link handles navigation; onNodeClick prop is an optional override.
           onNodeClick={(node) => {
             const n = node as GraphNode;
             if (onNodeClick) {
@@ -204,61 +287,148 @@ export default function Constellation({ onNodeClick }: Props) {
           }}
         />
       )}
-      {/* ------------------------------------------------------------------ */}
-      {/* Bottom sheet — shown when a node is tapped/clicked.               */}
-      {/* Displays name, role, and org so the user can confirm before        */}
-      {/* leaving the graph. Backdrop tap or × dismisses without navigating. */}
-      {/* ------------------------------------------------------------------ */}
+
+      {/* Bottom sheet */}
       {selectedNode && (
         <div
-          className="fixed inset-0 z-50 flex items-end"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 50,
+            display: 'flex',
+            alignItems: 'flex-end',
+          }}
           onClick={() => setSelectedNode(null)}
         >
-          {/* Semi-transparent backdrop */}
-          <div className="absolute inset-0 bg-black/50" />
-
-          {/* Sheet panel — constrained to mobile width on large screens.       */}
-          {/* mb-16 lifts the panel above the fixed bottom nav (4rem / 64px). */}
+          {/* Backdrop */}
           <div
-            className="relative w-full max-w-lg mx-auto bg-zinc-900 rounded-t-2xl px-5 pt-4 pb-10 mb-16 shadow-2xl"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              background: 'rgba(0,0,0,0.55)',
+            }}
+          />
+
+          {/* Sheet */}
+          <div
+            style={{
+              position: 'relative',
+              width: '100%',
+              maxWidth: 'var(--screen-max)',
+              margin: '0 auto',
+              background: '#2E2035', // night-800
+              borderRadius: '22px 22px 0 0',
+              padding: '16px 20px 40px',
+              marginBottom: 'var(--nav-height)',
+              boxShadow: 'var(--shadow-lg)',
+            }}
             onClick={(e) => e.stopPropagation()}
           >
             {/* Drag handle */}
-            <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-zinc-700" />
+            <div
+              style={{
+                width: 40,
+                height: 4,
+                borderRadius: 'var(--radius-pill)',
+                background: 'var(--night-600)',
+                margin: '0 auto 16px',
+              }}
+            />
 
-            {/* Person info + close button */}
-            <div className="flex items-start justify-between mb-5">
-              <div className="flex-1 min-w-0 pr-3">
-                <h2 className="text-base font-semibold text-white truncate">
+            {/* Person info */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                justifyContent: 'space-between',
+                marginBottom: 20,
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0, paddingRight: 12 }}>
+                <h2
+                  style={{
+                    fontFamily: 'var(--font-display)',
+                    fontSize: 'var(--text-h3)',
+                    fontWeight: 600,
+                    color: 'var(--text-on-night)',
+                    margin: '0 0 4px',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
                   {selectedNode.name}
                 </h2>
                 {selectedNode.role && (
-                  <p className="mt-0.5 text-sm text-zinc-400 truncate">
+                  <p
+                    style={{
+                      margin: '0',
+                      fontFamily: 'var(--font-sans)',
+                      fontSize: 'var(--text-sm)',
+                      color: 'var(--star-dim)',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
                     {selectedNode.role}
                   </p>
                 )}
                 {selectedNode.org && (
-                  <p className="text-sm text-zinc-400 truncate">
+                  <p
+                    style={{
+                      margin: '0',
+                      fontFamily: 'var(--font-sans)',
+                      fontSize: 'var(--text-sm)',
+                      color: 'var(--star-dim)',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
                     {selectedNode.org}
                   </p>
                 )}
                 {!selectedNode.role && !selectedNode.org && (
-                  <p className="mt-0.5 text-sm text-zinc-500">
+                  <p
+                    style={{
+                      margin: '0',
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: 'var(--text-xs)',
+                      color: 'var(--star-dim)',
+                    }}
+                  >
                     {selectedNode.factCount > 0
                       ? `${selectedNode.factCount} fact${selectedNode.factCount !== 1 ? 's' : ''}`
                       : 'No facts extracted yet'}
                   </p>
                 )}
               </div>
+
+              {/* Close */}
               <button
                 onClick={() => setSelectedNode(null)}
                 aria-label="Close"
-                className="shrink-0 text-zinc-500 hover:text-zinc-300 transition-colors"
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: '50%',
+                  border: 'none',
+                  background: 'var(--night-700)',
+                  color: 'var(--star-dim)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                }}
               >
                 <svg
                   viewBox="0 0 20 20"
                   fill="currentColor"
-                  className="w-5 h-5"
+                  width={14}
+                  height={14}
+                  aria-hidden="true"
                 >
                   <path
                     fillRule="evenodd"
@@ -269,10 +439,23 @@ export default function Constellation({ onNodeClick }: Props) {
               </button>
             </div>
 
-            {/* Navigate to profile */}
+            {/* View profile */}
             <Link
               href={`/people/${selectedNode.id}`}
-              className="block w-full rounded-full bg-violet-600 py-2.5 text-center text-sm font-medium text-white hover:bg-violet-500 active:bg-violet-700 transition-colors"
+              style={{
+                display: 'block',
+                width: '100%',
+                borderRadius: 'var(--radius-pill)',
+                background: 'var(--brand)',
+                padding: '12px 0',
+                textAlign: 'center',
+                fontFamily: 'var(--font-sans)',
+                fontSize: 'var(--text-sm)',
+                fontWeight: 600,
+                color: 'var(--text-on-accent)',
+                textDecoration: 'none',
+                boxShadow: 'var(--shadow-sm), var(--glow-brand)',
+              }}
             >
               View profile
             </Link>

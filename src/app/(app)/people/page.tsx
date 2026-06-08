@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { auth } from '@clerk/nextjs/server';
 import { redirect } from 'next/navigation';
 import prisma from '@/lib/prisma';
-import PersonCard from '@/components/person-card';
+import PeopleListWithSearch from '@/components/people-list-with-search';
 
 async function getPeople(userId: string) {
   const rows = await prisma.people.findMany({
@@ -47,37 +47,138 @@ export default async function PeoplePage() {
   if (!dbUser) redirect('/sign-in');
 
   const people = await getPeople(dbUser.id);
+  const activeCount = people.filter((p) => p.status === 'active').length;
 
   return (
-    <div className="px-4 pt-6 pb-4 max-w-lg mx-auto">
-      <div className="flex items-center justify-between mb-5">
-        <h1 className="text-xl font-semibold text-zinc-900">People</h1>
-        <Link
-          href="/people/new"
-          className="rounded-full bg-zinc-900 px-4 py-2 text-sm font-medium text-white"
+    <div
+      style={{
+        maxWidth: 'var(--screen-max)',
+        margin: '0 auto',
+        paddingBottom: 24,
+      }}
+    >
+      {/* Sticky header */}
+      <header
+        style={{
+          position: 'sticky',
+          top: 0,
+          zIndex: 10,
+          padding: '58px var(--gutter) 14px',
+          background: 'linear-gradient(var(--surface-canvas) 78%, transparent)',
+        }}
+      >
+        {/* Overline */}
+        <p
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 'var(--text-xs)',
+            textTransform: 'uppercase',
+            letterSpacing: 'var(--tracking-mono)',
+            color: 'var(--text-muted)',
+            margin: '0 0 6px',
+          }}
         >
-          Add
-        </Link>
-      </div>
+          {activeCount} {activeCount === 1 ? 'connection' : 'connections'}
+        </p>
 
-      {people.length === 0 ? (
-        <div className="flex flex-col items-center gap-3 pt-16 text-center">
-          <p className="text-zinc-500">No one in your vault yet.</p>
+        {/* Title row */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <h1
+            style={{
+              fontFamily: 'var(--font-display)',
+              fontSize: 'var(--text-h1)',
+              fontWeight: 600,
+              color: 'var(--text-strong)',
+              letterSpacing: 'var(--tracking-tight)',
+              margin: 0,
+              lineHeight: 'var(--leading-tight)',
+            }}
+          >
+            Your people
+          </h1>
+
+          {/* Add button — 44×44px circle */}
           <Link
             href="/people/new"
-            className="rounded-full bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white"
+            aria-label="Add person"
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: '50%',
+              background: 'var(--brand)',
+              color: 'var(--text-on-accent)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              textDecoration: 'none',
+              boxShadow: 'var(--shadow-sm)',
+              flexShrink: 0,
+              fontSize: 24,
+              lineHeight: 1,
+              transition: `background var(--dur-fast)`,
+            }}
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z" />
+            </svg>
+          </Link>
+        </div>
+      </header>
+
+      {/* Empty state */}
+      {people.length === 0 ? (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 16,
+            paddingTop: 80,
+            textAlign: 'center',
+            padding: '80px var(--gutter) 0',
+          }}
+        >
+          <p
+            style={{
+              color: 'var(--text-muted)',
+              fontFamily: 'var(--font-sans)',
+              fontSize: 'var(--text-base)',
+            }}
+          >
+            No one in your vault yet.
+          </p>
+          <Link
+            href="/people/new"
+            style={{
+              display: 'inline-block',
+              background: 'var(--brand)',
+              color: 'var(--text-on-accent)',
+              borderRadius: 'var(--radius-pill)',
+              padding: '10px 24px',
+              fontFamily: 'var(--font-sans)',
+              fontSize: 'var(--text-sm)',
+              fontWeight: 600,
+              textDecoration: 'none',
+              boxShadow: 'var(--shadow-sm)',
+            }}
           >
             Add your first person
           </Link>
         </div>
       ) : (
-        <ul className="flex flex-col gap-2">
-          {people.map((p) => (
-            <li key={p.id}>
-              <PersonCard {...p} />
-            </li>
-          ))}
-        </ul>
+        <PeopleListWithSearch people={people} />
       )}
     </div>
   );

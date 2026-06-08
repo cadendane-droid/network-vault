@@ -28,8 +28,17 @@ export default async function AppLayout({
   });
 
   return (
-    <div className="flex flex-col min-h-screen bg-zinc-50">
-      <main className="flex-1 pb-16">{children}</main>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: '100svh',
+        background: 'var(--surface-canvas)',
+      }}
+    >
+      <main style={{ flex: 1, paddingBottom: 'var(--nav-height)' }}>
+        {children}
+      </main>
       <Nav />
     </div>
   );
