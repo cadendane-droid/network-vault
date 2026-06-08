@@ -48,6 +48,8 @@ interface Props {
 
 export default function Constellation({ onNodeClick }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fgRef = useRef<any>(null);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
 
   const [nodes, setNodes] = useState<GraphNode[]>([]);
@@ -67,6 +69,16 @@ export default function Constellation({ onNodeClick }: Props) {
     });
     observer.observe(el);
     return () => observer.disconnect();
+  }, []);
+
+  // Apply link spring strength and distance via d3Force — neither is a typed
+  // prop on this version of react-force-graph-2d. Runs once after mount;
+  // affects all simulation ticks during cooldown and user interaction.
+  useEffect(() => {
+    const link = fgRef.current?.d3Force('link');
+    if (!link) return;
+    link.strength(0.7); // pulls connected nodes along when a neighbour moves
+    link.distance(60); // moderate rest length between connected nodes
   }, []);
 
   // Fetch graph data once on mount.
@@ -129,11 +141,13 @@ export default function Constellation({ onNodeClick }: Props) {
             (node as GraphNode).hasConfirmedFacts ? '#7c3aed' : '#71717a'
           }
           // Node size proportional to fact count.
-          // Library radius formula: sqrt(nodeVal) * nodeRelSize (default nodeRelSize=4).
-          // val=1 → radius 4 px (min); val=9 → radius 12 px (max).
-          // Clamped so zero-fact nodes still render at minimum size.
+          // Library radius formula: sqrt(nodeVal) * nodeRelSize.
+          // nodeRelSize=1 (overrides the library default of 4).
+          // nodeVal range 4–25 → radius 2–5 px.
+          // Adding 4 ensures zero-fact nodes still render at minimum size.
+          nodeRelSize={1}
           nodeVal={(node) =>
-            Math.max(1, Math.min(9, (node as GraphNode).factCount))
+            Math.max(4, Math.min(25, (node as GraphNode).factCount + 4))
           }
           // Node label: native tooltip on hover (always) + canvas text at zoom > 1.5.
           nodeLabel="name"
@@ -145,8 +159,8 @@ export default function Constellation({ onNodeClick }: Props) {
             if (n.x == null || n.y == null) return;
 
             // Mirror the nodeVal clamping so the label sits just below the node.
-            const val = Math.max(1, Math.min(9, n.factCount));
-            const radius = Math.sqrt(val) * 4; // nodeRelSize = 4 (default)
+            const val = Math.max(4, Math.min(25, n.factCount + 4));
+            const radius = Math.sqrt(val) * 1; // nodeRelSize = 1
 
             // Scale font inversely with zoom so apparent size stays constant.
             const fontSize = 11 / globalScale;
@@ -167,9 +181,17 @@ export default function Constellation({ onNodeClick }: Props) {
           linkLabel={(link) =>
             (link as GraphLink).relationship_type.replace(/_/g, ' ')
           }
-          // Stop the physics simulation after it settles — prevents
-          // continuous CPU usage once nodes have found stable positions.
-          cooldownTicks={100}
+          // Physics — tuned for an elastic, interconnected feel.
+          // linkStrength (0.7) is applied via fgRef d3Force in a useEffect above
+          // because it isn't a direct prop on this library version.
+          // Lower alphaDecay keeps the simulation warm longer for better settling.
+          // Lower velocityDecay reduces damping so nodes carry momentum.
+          // Longer warmup lets the layout settle before first render.
+          ref={fgRef}
+          d3AlphaDecay={0.02}
+          d3VelocityDecay={0.2}
+          warmupTicks={100}
+          cooldownTicks={200}
           // Node click — open the bottom sheet. The sheet's "View profile"
           // link handles navigation; onNodeClick prop is an optional override.
           onNodeClick={(node) => {
