@@ -2,6 +2,7 @@ import { auth } from '@clerk/nextjs/server';
 import { redirect, notFound } from 'next/navigation';
 import prisma from '@/lib/prisma';
 import { ProcessingIndicator } from '@/components/processing-indicator';
+import DeletePersonButton from '@/components/delete-person-button';
 
 async function getPersonProfile(personId: string, userId: string) {
   const person = await prisma.people.findUnique({
@@ -207,6 +208,11 @@ export default async function PersonProfilePage({
           </ul>
         </section>
       )}
+
+      {/* Delete */}
+      <div className="pt-4 border-t border-zinc-100">
+        <DeletePersonButton personId={person.id} />
+      </div>
 
       {/* Raw text */}
       {latestSource?.raw_text && (
