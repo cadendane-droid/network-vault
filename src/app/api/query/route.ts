@@ -81,7 +81,7 @@ export async function POST(request: NextRequest) {
   // ReadableStream. The client (chat.tsx) reads chunks via TextDecoder —
   // no framing or envelope format, identical to the previous toTextStreamResponse().
   const stream = anthropicClient.messages.stream({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-5',
     max_tokens: 1024,
     system: [
       {
