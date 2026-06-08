@@ -15,7 +15,7 @@ async function getPeople(userId: string) {
       created_at: true,
       _count: {
         select: {
-          facts: { where: { status: 'confirmed' } },
+          facts: { where: { status: { in: ['raw', 'confirmed'] } } },
         },
       },
       facts: {
@@ -31,7 +31,7 @@ async function getPeople(userId: string) {
     name: p.name,
     status: p.status,
     created_at: p.created_at,
-    confirmed_fact_count: p._count.facts,
+    fact_count: p._count.facts,
     is_processing: p.facts.length === 0,
   }));
 }

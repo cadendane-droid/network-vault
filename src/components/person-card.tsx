@@ -3,7 +3,7 @@ import Link from 'next/link';
 interface PersonCardProps {
   id: string;
   name: string;
-  confirmed_fact_count: number;
+  fact_count: number;
   is_processing: boolean;
   status: string;
   created_at: Date;
@@ -12,7 +12,7 @@ interface PersonCardProps {
 export default function PersonCard({
   id,
   name,
-  confirmed_fact_count,
+  fact_count,
   is_processing,
   status,
 }: PersonCardProps) {
@@ -27,7 +27,7 @@ export default function PersonCard({
           {status === 'active'
             ? is_processing
               ? 'Processing…'
-              : `${confirmed_fact_count} confirmed fact${confirmed_fact_count === 1 ? '' : 's'}`
+              : `${fact_count} fact${fact_count === 1 ? '' : 's'}`
             : 'Archived'}
         </span>
       </div>

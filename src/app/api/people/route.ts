@@ -127,7 +127,7 @@ export async function GET() {
       _count: {
         select: {
           facts: {
-            where: { status: 'confirmed' },
+            where: { status: { in: ['raw', 'confirmed'] } },
           },
         },
       },
@@ -139,7 +139,7 @@ export async function GET() {
     name: p.name,
     status: p.status,
     created_at: p.created_at,
-    confirmed_fact_count: p._count.facts,
+    fact_count: p._count.facts,
   }));
 
   return NextResponse.json(result);
