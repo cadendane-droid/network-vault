@@ -4,6 +4,7 @@ import { extractFromSource, type SourceKind } from '@/lib/claude';
 import { EXTRACTION_SYSTEM_PROMPT } from '@/lib/prompts/extraction';
 import { validateExtractionOutput } from '@/lib/validation/extraction';
 import { invalidateContext } from '@/lib/vault-cache';
+import { captureServerEvent } from '@/lib/posthog-server';
 
 export const extractPersonFacts = inngest.createFunction(
   {
@@ -215,6 +216,26 @@ export const extractPersonFacts = inngest.createFunction(
         data: { processing_status: 'complete' },
       })
     );
+
+    // ── Step 9: Analytics ────────────────────────────────────────────────────
+    // Distinct ID must be the Clerk ID — that's what the browser client
+    // identifies with — so look it up from the DB user id in the event.
+    await step.run('capture-processing-completed', async () => {
+      const dbUser = await prisma.user.findUnique({
+        where: { id: user_id },
+        select: { clerk_id: true },
+      });
+      await captureServerEvent(
+        dbUser?.clerk_id ?? user_id,
+        'processing_completed',
+        {
+          person_id,
+          source_id,
+          facts_count: factsWritten,
+          edges_count: edgesWritten,
+        }
+      );
+    });
 
     // Fire embed event — Step 32's job picks this up when registered
     await step.sendEvent('send-embed-event', {

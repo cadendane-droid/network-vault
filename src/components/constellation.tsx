@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
+import { usePostHog } from 'posthog-js/react';
 
 // Dynamic import required — react-force-graph-2d accesses window, canvas, and
 // requestAnimationFrame at module load time.
@@ -80,6 +81,7 @@ interface Props {
 }
 
 export default function Constellation({ onNodeClick }: Props) {
+  const posthog = usePostHog();
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const fgRef = useRef<any>(null);
@@ -124,10 +126,14 @@ export default function Constellation({ onNodeClick }: Props) {
       .then(({ nodes: n, edges: e }) => {
         setNodes(n);
         setLinks(e);
+        posthog?.capture('graph_opened', {
+          node_count: n.length,
+          edge_count: e.length,
+        });
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [posthog]);
 
   const graphData = useMemo(() => ({ nodes, links }), [nodes, links]);
 

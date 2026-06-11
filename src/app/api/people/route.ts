@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { inngest } from '@/inngest/client';
+import { captureServerEvent } from '@/lib/posthog-server';
 
 const VALID_KINDS = ['conversation', 'note', 'profile', 'observation'] as const;
 type SourceKind = (typeof VALID_KINDS)[number];
@@ -109,6 +110,11 @@ export async function POST(request: NextRequest) {
     });
     personId = person.id;
     sourceId = source.id;
+
+    await captureServerEvent(user.clerkId, 'person_added', {
+      person_id: personId,
+      source_kind,
+    });
   }
 
   await prisma.source.update({
@@ -123,6 +129,11 @@ export async function POST(request: NextRequest) {
       source_id: sourceId,
       user_id: user.userId,
     },
+  });
+
+  await captureServerEvent(user.clerkId, 'source_submitted', {
+    person_id: personId,
+    source_id: sourceId,
   });
 
   return NextResponse.json(

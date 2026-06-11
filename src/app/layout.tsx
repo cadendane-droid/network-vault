@@ -1,5 +1,7 @@
 import { ClerkProvider } from '@clerk/nextjs';
 import type { Metadata } from 'next';
+import { Suspense } from 'react';
+import { PostHogProvider } from './providers';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -15,7 +17,11 @@ export default function RootLayout({
   return (
     <ClerkProvider>
       <html lang="en" className="h-full">
-        <body className="min-h-full flex flex-col">{children}</body>
+        <body className="min-h-full flex flex-col">
+          <PostHogProvider>
+            <Suspense>{children}</Suspense>
+          </PostHogProvider>
+        </body>
       </html>
     </ClerkProvider>
   );

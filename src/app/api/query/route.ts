@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import prisma from '@/lib/prisma';
 import { getAuthenticatedUser } from '@/lib/auth';
+import { captureServerEvent } from '@/lib/posthog-server';
 import { buildVaultContext } from '@/lib/vault-context';
 import { getCachedContext, setCachedContext } from '@/lib/vault-cache';
 import { QUERY_SYSTEM_PROMPT } from '@/lib/prompts/query';
@@ -69,6 +71,19 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
+
+  // The route loads the full vault as context rather than retrieving a
+  // per-query subset, so results_count is the number of facts the context
+  // includes — same filters as buildVaultContext.
+  const resultsCount = await prisma.fact.count({
+    where: {
+      status: { in: ['raw', 'confirmed'] },
+      person: { user_id: user.userId, status: 'active' },
+    },
+  });
+  await captureServerEvent(user.clerkId, 'query_asked', {
+    results_count: resultsCount,
+  });
 
   // Call Claude with prompt caching.
   //

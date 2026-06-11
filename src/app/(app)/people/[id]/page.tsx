@@ -4,6 +4,7 @@ import { redirect, notFound } from 'next/navigation';
 import prisma from '@/lib/prisma';
 import { ProcessingIndicator } from '@/components/processing-indicator';
 import DeletePersonButton from '@/components/delete-person-button';
+import TrackProfileView from '@/components/track-profile-view';
 
 async function getPersonProfile(personId: string, userId: string) {
   const person = await prisma.people.findUnique({
@@ -173,6 +174,7 @@ export default async function PersonProfilePage({
         paddingBottom: 40,
       }}
     >
+      <TrackProfileView personId={person.id} />
       {/* Sticky top bar */}
       <header
         style={{
