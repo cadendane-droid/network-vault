@@ -2,6 +2,7 @@ import { auth } from '@clerk/nextjs/server';
 import { redirect } from 'next/navigation';
 import prisma from '@/lib/prisma';
 import UpgradeButton from '@/components/upgrade-button';
+import { FREE_PERSON_LIMIT } from '@/lib/limits';
 
 export default async function AccountPage({
   searchParams,
@@ -25,7 +26,7 @@ export default async function AccountPage({
 
   const justUpgraded = upgraded === 'true';
   const isPro = dbUser.plan === 'pro';
-  const FREE_LIMIT = 25;
+  const FREE_LIMIT = FREE_PERSON_LIMIT;
 
   return (
     <div className="px-4 pt-6 pb-4 max-w-lg mx-auto">

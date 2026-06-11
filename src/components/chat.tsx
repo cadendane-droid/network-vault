@@ -400,8 +400,10 @@ export default function Chat() {
                 outline: 'none',
                 maxHeight: 120,
                 overflowY: 'auto',
-                lineHeight: 'var(--leading-normal)',
-                padding: '4px 0',
+                // 24px line + 8px top/bottom = 40px single-line height,
+                // matching the send button so the placeholder sits centered.
+                lineHeight: '24px',
+                padding: '8px 0',
                 opacity: isStreaming ? 0.6 : 1,
                 fieldSizing: 'content',
               } as React.CSSProperties

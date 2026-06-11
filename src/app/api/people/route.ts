@@ -3,6 +3,7 @@ import prisma from '@/lib/prisma';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { inngest } from '@/inngest/client';
 import { captureServerEvent } from '@/lib/posthog-server';
+import { FREE_PERSON_LIMIT } from '@/lib/limits';
 
 const VALID_KINDS = ['conversation', 'note', 'profile', 'observation'] as const;
 type SourceKind = (typeof VALID_KINDS)[number];
@@ -65,11 +66,10 @@ export async function POST(request: NextRequest) {
     const peopleCount = await prisma.people.count({
       where: { user_id: user.userId },
     });
-    if (peopleCount >= 25) {
+    if (peopleCount >= FREE_PERSON_LIMIT) {
       return NextResponse.json(
         {
-          error:
-            'Free plan limit reached (25 people). Upgrade to Pro to add unlimited people.',
+          error: `Free plan limit reached (${FREE_PERSON_LIMIT} people). Upgrade to Pro to add unlimited people.`,
         },
         { status: 402 }
       );

@@ -84,7 +84,7 @@ All items below are outside the formal 52-step plan unless noted.
 | `src/app/(app)/network/page.tsx` | Empty state + `<Constellation />` |
 | `src/app/(app)/account/page.tsx` | Full account page with plan, people count, upgrade CTA |
 | `src/app/(app)/people/[id]/page.tsx` | Added `TYPE_LABELS` for all 18 fact types; added `<DeletePersonButton>` |
-| `src/app/api/people/route.ts` | 25-person free-tier gate on `POST` |
+| `src/app/api/people/route.ts` | 15-person free-tier gate on `POST` (constant in `src/lib/limits.ts`) |
 | `src/app/api/people/[id]/route.ts` | Added `DELETE` handler with transactional deletion + `invalidateContext` |
 | `src/app/api/query/route.ts` | Full rewrite: uses `buildVaultContext` + `vault-cache`; Anthropic SDK direct with `cache_control: ephemeral`; streaming via `ReadableStream`; no longer calls `retrieveContext` or Voyage AI at query time |
 | `src/components/add-person-form.tsx` | Detects 402, shows amber upgrade banner |

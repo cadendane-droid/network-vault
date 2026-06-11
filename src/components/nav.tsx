@@ -124,15 +124,15 @@ export default function Nav() {
           <span style={labelStyle}>Map</span>
         </Link>
 
-        {/* Ask — center, raised 18px above the bar */}
+        {/* Ask — center, vertically level with the People and Map tabs */}
         <Link
           href="/query"
           aria-label="Ask"
           style={{
             position: 'absolute',
             left: '50%',
-            transform: 'translateX(-50%)',
-            top: -18,
+            transform: 'translate(-50%, -50%)',
+            top: '50%',
             width: 46,
             height: 46,
             borderRadius: '50%',

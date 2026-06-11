@@ -3,7 +3,7 @@ import { auth } from '@clerk/nextjs/server';
 import { redirect, notFound } from 'next/navigation';
 import prisma from '@/lib/prisma';
 import { ProcessingIndicator } from '@/components/processing-indicator';
-import DeletePersonButton from '@/components/delete-person-button';
+import ProfileMenu from '@/components/profile-menu';
 import TrackProfileView from '@/components/track-profile-view';
 
 async function getPersonProfile(personId: string, userId: string) {
@@ -221,33 +221,8 @@ export default async function PersonProfilePage({
           </svg>
         </Link>
 
-        {/* More button (placeholder) */}
-        <button
-          aria-label="More options"
-          style={{
-            width: 40,
-            height: 40,
-            borderRadius: '50%',
-            background: 'var(--surface-card)',
-            border: '1px solid var(--border-subtle)',
-            color: 'var(--ink-700)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer',
-            flexShrink: 0,
-          }}
-        >
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 20 20"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
-          </svg>
-        </button>
+        {/* More menu — holds the delete-person action */}
+        <ProfileMenu personId={person.id} />
       </header>
 
       {/* Identity section */}
@@ -529,20 +504,6 @@ export default async function PersonProfilePage({
             </p>
           </details>
         )}
-
-        {/* Delete */}
-        <div
-          style={{
-            paddingTop: 20,
-            borderTop: '1px solid var(--border-subtle)',
-            display: 'flex',
-            justifyContent: 'center',
-          }}
-        >
-          <div style={{ color: 'var(--danger)' }}>
-            <DeletePersonButton personId={person.id} />
-          </div>
-        </div>
       </div>
     </div>
   );
