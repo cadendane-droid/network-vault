@@ -21,5 +21,11 @@ export async function getAuthenticatedUser(request?: NextRequest) {
     clerkId,
     userId: user.id,
     plan: user.plan,
+    daily_upload_count: user.daily_upload_count,
+    daily_upload_reset_at: user.daily_upload_reset_at,
+    daily_query_count: user.daily_query_count,
+    daily_query_reset_at: user.daily_query_reset_at,
+    monthly_query_count: user.monthly_query_count,
+    monthly_query_reset_at: user.monthly_query_reset_at,
   };
 }

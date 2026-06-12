@@ -57,9 +57,11 @@ export default function Chat() {
 
       if (!res.ok || !res.body) {
         const data = await res.json().catch(() => ({}));
+        // Limit errors carry a machine code in `error` and human-readable
+        // text in `message`; older errors put the text in `error` directly.
+        const { error, message } = data as { error?: string; message?: string };
         const errMsg =
-          (data as { error?: string }).error ??
-          'Something went wrong. Please try again.';
+          message ?? error ?? 'Something went wrong. Please try again.';
         setMessages((prev) => {
           const updated = [...prev];
           const last = updated[updated.length - 1];

@@ -6,6 +6,8 @@ import { captureServerEvent } from '@/lib/posthog-server';
 import { buildVaultContext } from '@/lib/vault-context';
 import { getCachedContext, setCachedContext } from '@/lib/vault-cache';
 import { QUERY_SYSTEM_PROMPT } from '@/lib/prompts/query';
+import { DAILY_QUERY_LIMIT, MONTHLY_QUERY_LIMIT } from '@/lib/limits';
+import { currentDailyCount, currentMonthlyCount, utcToday } from '@/lib/usage';
 
 // Module-level singleton — same pattern as src/lib/claude.ts.
 // Build-safe: Anthropic SDK reads the env var at call time, not import time.
@@ -36,10 +38,37 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // TODO: enforce free-tier query count limit once usage tracking is implemented.
-  // if (user.plan === 'free' && queryCount >= FREE_TIER_QUERY_LIMIT) {
-  //   return NextResponse.json({ error: 'Query limit reached. Upgrade to Pro.' }, { status: 402 });
-  // }
+  // Query caps — daily first, then monthly; whichever trips first wins.
+  // Counters with a rolled-over window read as 0 (see src/lib/usage.ts).
+  const now = new Date();
+  const queriesToday = currentDailyCount(
+    user.daily_query_count,
+    user.daily_query_reset_at,
+    now
+  );
+  if (queriesToday >= DAILY_QUERY_LIMIT) {
+    return NextResponse.json(
+      {
+        error: 'DAILY_QUERY_LIMIT',
+        message: 'Daily query limit reached. Come back tomorrow.',
+      },
+      { status: 402 }
+    );
+  }
+  const queriesThisMonth = currentMonthlyCount(
+    user.monthly_query_count,
+    user.monthly_query_reset_at,
+    now
+  );
+  if (queriesThisMonth >= MONTHLY_QUERY_LIMIT) {
+    return NextResponse.json(
+      {
+        error: 'MONTHLY_QUERY_LIMIT',
+        message: 'Monthly query limit reached.',
+      },
+      { status: 402 }
+    );
+  }
 
   // Build (or retrieve from cache) the full vault context string.
   // Context serialisation and any DB errors must be caught here — once the
@@ -83,6 +112,20 @@ export async function POST(request: NextRequest) {
   });
   await captureServerEvent(user.clerkId, 'query_asked', {
     results_count: resultsCount,
+  });
+
+  // All gates passed and the vault is non-empty — the query is being served,
+  // so count it. Writing counts and window dates together makes resets
+  // implicit. Done before streaming starts; afterwards the response is
+  // committed and a failed update couldn't be surfaced anyway.
+  await prisma.user.update({
+    where: { id: user.userId },
+    data: {
+      daily_query_count: queriesToday + 1,
+      daily_query_reset_at: utcToday(now),
+      monthly_query_count: queriesThisMonth + 1,
+      monthly_query_reset_at: utcToday(now),
+    },
   });
 
   // Call Claude with prompt caching.

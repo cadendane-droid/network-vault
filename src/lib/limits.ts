@@ -1,3 +1,7 @@
-// Free-plan limits, shared by the API gate and every UI surface that
-// displays the number — change it here and nowhere else.
-export const FREE_PERSON_LIMIT = 15;
+// Per-user usage limits (beta hard caps), shared by the API gates and every
+// UI surface that displays the numbers — change them here and nowhere else.
+export const PERSON_LIMIT = 15;
+export const SOURCE_TEXT_LIMIT = 3000;
+export const DAILY_UPLOAD_LIMIT = 15;
+export const DAILY_QUERY_LIMIT = 15;
+export const MONTHLY_QUERY_LIMIT = 60;

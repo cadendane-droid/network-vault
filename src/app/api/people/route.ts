@@ -3,7 +3,12 @@ import prisma from '@/lib/prisma';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { inngest } from '@/inngest/client';
 import { captureServerEvent } from '@/lib/posthog-server';
-import { FREE_PERSON_LIMIT } from '@/lib/limits';
+import {
+  PERSON_LIMIT,
+  SOURCE_TEXT_LIMIT,
+  DAILY_UPLOAD_LIMIT,
+} from '@/lib/limits';
+import { currentDailyCount, utcToday } from '@/lib/usage';
 
 const VALID_KINDS = ['conversation', 'note', 'profile', 'observation'] as const;
 type SourceKind = (typeof VALID_KINDS)[number];
@@ -41,10 +46,36 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
+  if (raw_text.length > SOURCE_TEXT_LIMIT) {
+    return NextResponse.json(
+      {
+        error: 'TEXT_TOO_LONG',
+        message: `Notes must be under ${SOURCE_TEXT_LIMIT.toLocaleString('en-US')} characters.`,
+      },
+      { status: 400 }
+    );
+  }
   if (!isValidKind(source_kind)) {
     return NextResponse.json(
       { error: `source_kind must be one of: ${VALID_KINDS.join(', ')}` },
       { status: 400 }
+    );
+  }
+
+  // Daily upload cap — applies to every source submission, before any write.
+  const now = new Date();
+  const uploadsToday = currentDailyCount(
+    user.daily_upload_count,
+    user.daily_upload_reset_at,
+    now
+  );
+  if (uploadsToday >= DAILY_UPLOAD_LIMIT) {
+    return NextResponse.json(
+      {
+        error: 'DAILY_UPLOAD_LIMIT',
+        message: 'Daily upload limit reached. Come back tomorrow.',
+      },
+      { status: 402 }
     );
   }
 
@@ -61,15 +92,18 @@ export async function POST(request: NextRequest) {
     select: { id: true },
   });
 
-  // Free-tier limit only applies when a new people row would be created.
-  if (!existingPerson && user.plan === 'free') {
+  // Beta hard cap on people — applies to every account, but only when a new
+  // people row would be created (adding a source to an existing person is
+  // governed by the upload cap alone).
+  if (!existingPerson) {
     const peopleCount = await prisma.people.count({
       where: { user_id: user.userId },
     });
-    if (peopleCount >= FREE_PERSON_LIMIT) {
+    if (peopleCount >= PERSON_LIMIT) {
       return NextResponse.json(
         {
-          error: `Free plan limit reached (${FREE_PERSON_LIMIT} people). Upgrade to Pro to add unlimited people.`,
+          error: 'PEOPLE_LIMIT',
+          message: `You've reached the ${PERSON_LIMIT}-person limit for the beta.`,
         },
         { status: 402 }
       );
@@ -116,6 +150,16 @@ export async function POST(request: NextRequest) {
       source_kind,
     });
   }
+
+  // Source written — count it against today's upload quota. Writing the
+  // count and its window date together makes the daily reset implicit.
+  await prisma.user.update({
+    where: { id: user.userId },
+    data: {
+      daily_upload_count: uploadsToday + 1,
+      daily_upload_reset_at: utcToday(now),
+    },
+  });
 
   await prisma.source.update({
     where: { id: sourceId },

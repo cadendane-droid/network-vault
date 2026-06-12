@@ -18,9 +18,19 @@ model User {
   stripe_customer_id String?  @unique @db.Text
   created_at         DateTime @default(now()) @db.Timestamptz(6)
 
-  people  People[]
-  sources Source[]
-  edges   Edge[]
+  // Usage-limit counters (src/lib/limits.ts). reset_at columns record the
+  // UTC day/month the counter belongs to; a null means never used.
+  daily_upload_count     Int       @default(0)
+  daily_upload_reset_at  DateTime? @db.Date
+  daily_query_count      Int       @default(0)
+  daily_query_reset_at   DateTime? @db.Date
+  monthly_query_count    Int       @default(0)
+  monthly_query_reset_at DateTime? @db.Date
+
+  people   People[]
+  sources  Source[]
+  edges    Edge[]
+  feedback Feedback[]
 
   @@map("users")
 }
@@ -130,6 +140,28 @@ model Fact {
 // relationship_type enum: colleagues, co_investors, collaborators, introduced_by,
 //                         shared_interest, classmates, co_founders (DM §4.4)
 // status enum: inferred, confirmed (DM §4.5)
+
+// ─── Layer 7: Feedback ────────────────────────────────────────────────────────
+// In-app feedback submissions. Written by any authenticated user via
+// POST /api/feedback; read only by admins (ADMIN_CLERK_IDS) via GET.
+// Access control lives in the API layer, like every other table.
+// status enum: new, reviewed
+
+model Feedback {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id    String   @db.Uuid
+  message    String   @db.Text
+  page       String?  @db.Text
+  status     String   @default("new") @db.Text
+  user_agent String?  @db.Text
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  user User @relation(fields: [user_id], references: [id])
+
+  @@index([user_id], map: "idx_feedback_user_id")
+  @@index([created_at], map: "idx_feedback_created_at")
+  @@map("feedback")
+}
 
 model Edge {
   id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid

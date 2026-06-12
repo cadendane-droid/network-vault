@@ -2,7 +2,13 @@ import { auth } from '@clerk/nextjs/server';
 import { redirect } from 'next/navigation';
 import prisma from '@/lib/prisma';
 import UpgradeButton from '@/components/upgrade-button';
-import { FREE_PERSON_LIMIT } from '@/lib/limits';
+import {
+  PERSON_LIMIT,
+  DAILY_UPLOAD_LIMIT,
+  DAILY_QUERY_LIMIT,
+  MONTHLY_QUERY_LIMIT,
+} from '@/lib/limits';
+import { currentDailyCount, currentMonthlyCount } from '@/lib/usage';
 
 export default async function AccountPage({
   searchParams,
@@ -14,7 +20,17 @@ export default async function AccountPage({
 
   const dbUser = await prisma.user.findUnique({
     where: { clerk_id: clerkId },
-    select: { id: true, email: true, plan: true },
+    select: {
+      id: true,
+      email: true,
+      plan: true,
+      daily_upload_count: true,
+      daily_upload_reset_at: true,
+      daily_query_count: true,
+      daily_query_reset_at: true,
+      monthly_query_count: true,
+      monthly_query_reset_at: true,
+    },
   });
   if (!dbUser) redirect('/sign-in');
 
@@ -26,7 +42,36 @@ export default async function AccountPage({
 
   const justUpgraded = upgraded === 'true';
   const isPro = dbUser.plan === 'pro';
-  const FREE_LIMIT = FREE_PERSON_LIMIT;
+
+  // Counters whose window has rolled over read as 0 — the same logic the
+  // API gates use, so the display never shows a stale "limit reached".
+  const usageRows = [
+    { label: 'People', count: peopleCount, limit: PERSON_LIMIT },
+    {
+      label: 'Uploads today',
+      count: currentDailyCount(
+        dbUser.daily_upload_count,
+        dbUser.daily_upload_reset_at
+      ),
+      limit: DAILY_UPLOAD_LIMIT,
+    },
+    {
+      label: 'Queries today',
+      count: currentDailyCount(
+        dbUser.daily_query_count,
+        dbUser.daily_query_reset_at
+      ),
+      limit: DAILY_QUERY_LIMIT,
+    },
+    {
+      label: 'Queries this month',
+      count: currentMonthlyCount(
+        dbUser.monthly_query_count,
+        dbUser.monthly_query_reset_at
+      ),
+      limit: MONTHLY_QUERY_LIMIT,
+    },
+  ];
 
   return (
     <div className="px-4 pt-6 pb-4 max-w-lg mx-auto">
@@ -65,32 +110,34 @@ export default async function AccountPage({
           </span>
         </div>
 
-        {/* Usage row */}
-        <div className="px-4 py-3 flex items-center justify-between">
-          <span className="text-sm text-zinc-500">People</span>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-zinc-900 font-medium">
-              {isPro ? peopleCount : `${peopleCount} / ${FREE_LIMIT}`}
-            </span>
-            {/* Progress bar — only shown on free plan */}
-            {!isPro && (
+        {/* Usage rows — beta caps apply to every account */}
+        {usageRows.map(({ label, count, limit }) => (
+          <div
+            key={label}
+            className="px-4 py-3 flex items-center justify-between"
+          >
+            <span className="text-sm text-zinc-500">{label}</span>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-zinc-900 font-medium">
+                {count} / {limit}
+              </span>
               <div className="w-16 h-1.5 rounded-full bg-zinc-100 overflow-hidden">
                 <div
                   className={`h-full rounded-full transition-all ${
-                    peopleCount >= FREE_LIMIT
+                    count >= limit
                       ? 'bg-red-400'
-                      : peopleCount >= FREE_LIMIT * 0.8
+                      : count >= limit * 0.8
                         ? 'bg-amber-400'
                         : 'bg-violet-500'
                   }`}
                   style={{
-                    width: `${Math.min(100, (peopleCount / FREE_LIMIT) * 100)}%`,
+                    width: `${Math.min(100, (count / limit) * 100)}%`,
                   }}
                 />
               </div>
-            )}
+            </div>
           </div>
-        </div>
+        ))}
 
         {/* Action row */}
         <div className="px-4 py-4">

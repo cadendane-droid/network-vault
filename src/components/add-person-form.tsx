@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { FREE_PERSON_LIMIT } from '@/lib/limits';
+import { PERSON_LIMIT } from '@/lib/limits';
 
 const SOURCE_KINDS = [
   { value: 'conversation', label: 'Conversation' },
@@ -45,14 +45,19 @@ export default function AddPersonForm() {
       });
 
       if (!res.ok) {
-        // 402 = free-tier limit hit — show upgrade prompt instead of generic error.
-        if (res.status === 402) {
+        const data = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          message?: string;
+        };
+        // Person cap hit — show the dedicated banner instead of a generic
+        // error. Other limit errors (e.g. DAILY_UPLOAD_LIMIT) also come back
+        // as 402 but carry their own message.
+        if (data.error === 'PEOPLE_LIMIT') {
           setLimitReached(true);
           setSubmitting(false);
           return;
         }
-        const data = await res.json().catch(() => ({}));
-        setError((data as { error?: string }).error ?? 'Something went wrong.');
+        setError(data.message ?? data.error ?? 'Something went wrong.');
         setSubmitting(false);
         return;
       }
@@ -146,15 +151,14 @@ export default function AddPersonForm() {
       {limitReached && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
           <p className="text-sm text-amber-800">
-            You&apos;ve reached the {FREE_PERSON_LIMIT}-person limit on the free
-            plan.{' '}
+            You&apos;ve reached the {PERSON_LIMIT}-person limit for the beta.{' '}
             <Link
               href="/account"
               className="font-semibold underline underline-offset-2 hover:text-amber-900"
             >
-              Upgrade to Pro
+              View your usage
             </Link>{' '}
-            to add unlimited people.
+            on the account page.
           </p>
         </div>
       )}

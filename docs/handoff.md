@@ -52,6 +52,24 @@ All items below are outside the formal 52-step plan unless noted.
 
 ---
 
+## 1c. Work Completed — Feedback Feature (2026-06-12)
+
+In-app feedback button + private admin intake, built outside the formal plan.
+
+| Item | Summary |
+|------|---------|
+| **`feedback` table** | New `Feedback` model / `feedback` table: `id` uuid PK, `user_id` FK → `users.id` (NOT NULL), `message` text NOT NULL, `page` text nullable, `status` text NOT NULL default `'new'` (values `new`/`reviewed`), `user_agent` text nullable, `created_at` timestamptz default `now()`. Indexes `idx_feedback_user_id`, `idx_feedback_created_at`. RLS enabled with no policies (deny-all backstop, same convention as the other 7 tables). Migration `20260612090000_add_feedback`. |
+| **`POST /api/feedback`** | `src/app/api/feedback/route.ts` — auth-gated (401), validates message (400 `MESSAGE_REQUIRED` / `MESSAGE_TOO_LONG`, max 2,000 chars trimmed), inserts `{ user_id, message, page, user_agent }`, returns 201. **Never logs the message body** (same privacy rule as `raw_text`). Does **not** touch any usage counter — feedback is free and unmetered. |
+| **`GET /api/feedback`** | Same route file, admin only. Checks `clerkId` against `ADMIN_CLERK_IDS` via `src/lib/admin.ts` (`isAdminClerkId`); non-admins get 403 with no data. Returns all rows newest-first, each joined with the submitter's email. |
+| **`src/components/feedback-button.tsx`** | `'use client'`. Terracotta pill (`var(--brand)`, existing tokens only — no new hex), fixed lower-left at `left: 16px`, `bottom: calc(var(--nav-height) + 16px + env(safe-area-inset-bottom))` so it clears the bottom nav on phones with home bars. Opens a night-styled bottom sheet (same pattern as the constellation node sheet): autofocused textarea (maxLength 2000), Send with loading state, error state with retry, success state "Thanks — got it." that auto-closes after 1.4s. Submits `page: "network"` + `navigator.userAgent`. |
+| **Placement** | Rendered **only** in `src/app/(app)/network/page.tsx` — in both the empty state and the constellation state. Absent from People, Query, and Account. |
+| **Admin page** | `src/app/(app)/admin/feedback/page.tsx` — server component. `getAuthenticatedUser` + `isAdminClerkId`; unauthenticated or non-admin visitors get `notFound()` (404 — page never reveals it exists). Renders cards newest-first: message prominent, then email · date/time · page · status, using cream surfaces with a terracotta left-accent border. |
+| **`ADMIN_CLERK_IDS`** | New server-only env var (comma-separated Clerk user IDs). Placeholder added to `.env.example`. **Must be set in `.env.local` and in Vercel project env before the admin page/API work in production.** Never expose with a `NEXT_PUBLIC_` prefix. |
+
+**Out of scope / future:** email or push notification on new feedback; a "mark reviewed" action on the admin page (the `status` column is already in place for it); feedback button on pages other than the graph.
+
+---
+
 ## 2. Current File State
 
 ### Created across all sessions
@@ -294,6 +312,9 @@ The person resolution fix (Deviation U) prevents new ghost rows. Existing ones s
 | `STRIPE_WEBHOOK_SECRET` | Webhook signature verification | Added Phase 7 (Step 48) |
 | `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Available client-side | Added Phase 7 (Step 48) |
 | `STRIPE_PRICE_ID` | Checkout session line item | **Must be set** — Pro plan price ID from Stripe dashboard |
+| `NEXT_PUBLIC_POSTHOG_KEY` | posthog-js (client) + posthog-node (server events) | Added 2026-06-11 (PostHog integration) |
+| `NEXT_PUBLIC_POSTHOG_HOST` | PostHog API host (`https://us.i.posthog.com`) | Added 2026-06-11 |
+| `ADMIN_CLERK_IDS` | `isAdminClerkId()` — gates `GET /api/feedback` and `/admin/feedback` | **Must be set in `.env.local` and Vercel** — comma-separated Clerk user IDs; server-only |
 
 ---
 
@@ -377,5 +398,7 @@ Before or during Step 52, run the preview SELECT in `scripts/cleanup-ghost-peopl
 | `20260605000000_voyage_embeddings` | `db execute` + `migrate resolve` |
 | `20260606000000_stripe_customer_id` | `db execute` + `migrate resolve` |
 | `20260606120000_rls` | `db execute` + `migrate resolve` |
+| `20260611120000_usage_limits` | hand-written SQL + `migrate deploy` |
+| `20260612090000_add_feedback` | hand-written SQL + `migrate deploy` |
 
-**Future migrations:** always use `prisma db execute --file` + `prisma migrate resolve --applied` — never `migrate dev` (shadow DB lacks pgvector).
+**Future migrations:** hand-write `prisma/migrations/<timestamp>_<name>/migration.sql`, then `npx prisma migrate deploy` + `npx prisma generate`. Never `migrate dev` (shadow DB lacks pgvector). `migrate deploy` is simpler than the older `db execute` + `migrate resolve` flow and keeps the history table in sync automatically.
