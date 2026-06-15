@@ -14,6 +14,7 @@ export default function FeedbackButton() {
   const [message, setMessage] = useState('');
   const [phase, setPhase] = useState<Phase>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [keyboardInset, setKeyboardInset] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Autofocus when the sheet opens.
@@ -21,11 +22,33 @@ export default function FeedbackButton() {
     if (open) textareaRef.current?.focus();
   }, [open]);
 
+  // The sheet is pinned to the bottom of the layout viewport, which doesn't
+  // shrink when the mobile keyboard opens — so the keyboard would cover the
+  // Send button. Track how much of the viewport bottom the keyboard occupies
+  // (via visualViewport) and lift the sheet by that amount.
+  useEffect(() => {
+    if (!open) return;
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      setKeyboardInset(inset);
+    };
+    update();
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    return () => {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+    };
+  }, [open]);
+
   function close() {
     setOpen(false);
     setPhase('idle');
     setErrorMsg(null);
     setMessage('');
+    setKeyboardInset(0);
   }
 
   async function handleSubmit() {
@@ -144,6 +167,8 @@ export default function FeedbackButton() {
               borderRadius: '22px 22px 0 0',
               padding: '16px 20px calc(28px + env(safe-area-inset-bottom))',
               boxShadow: 'var(--shadow-lg)',
+              transform: `translateY(${-keyboardInset}px)`,
+              transition: 'transform var(--dur-fast)',
             }}
             onClick={(e) => e.stopPropagation()}
           >
