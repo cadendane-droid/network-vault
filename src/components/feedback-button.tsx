@@ -165,7 +165,8 @@ export default function FeedbackButton() {
               margin: '0 auto',
               background: 'var(--night-800)',
               borderRadius: '22px 22px 0 0',
-              padding: '16px 20px calc(28px + env(safe-area-inset-bottom))',
+              padding:
+                '16px 20px calc(var(--nav-height) + 28px + env(safe-area-inset-bottom))',
               boxShadow: 'var(--shadow-lg)',
               transform: `translateY(${-keyboardInset}px)`,
               transition: 'transform var(--dur-fast)',
