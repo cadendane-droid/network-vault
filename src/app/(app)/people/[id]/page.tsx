@@ -141,6 +141,7 @@ export default async function PersonProfilePage({
   const processingStatus = latestSource?.processing_status ?? 'complete';
   const isProcessing =
     processingStatus === 'pending' || processingStatus === 'processing';
+  const isFailed = processingStatus === 'failed';
 
   const palette = getAvatarPalette(person.name);
   const initials = getInitials(person.name);
@@ -355,11 +356,15 @@ export default async function PersonProfilePage({
         )}
 
         {/* Empty facts state */}
-        {Object.keys(factsByType).length === 0 && !isProcessing && (
-          <p style={{ color: 'var(--text-faint)', fontSize: 'var(--text-sm)' }}>
-            No facts extracted yet. Try adding more notes.
-          </p>
-        )}
+        {Object.keys(factsByType).length === 0 &&
+          !isProcessing &&
+          !isFailed && (
+            <p
+              style={{ color: 'var(--text-faint)', fontSize: 'var(--text-sm)' }}
+            >
+              No facts extracted yet. Try adding more notes.
+            </p>
+          )}
 
         {/* Connections */}
         {connections.length > 0 && (

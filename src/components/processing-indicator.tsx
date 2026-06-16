@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 interface Props {
@@ -8,20 +8,25 @@ interface Props {
   initialStatus: string;
 }
 
+const isTerminal = (s: string) => s === 'complete' || s === 'failed';
+
 /**
  * Polls GET /api/people/[id]/status every 3 seconds while processing_status
- * is pending or processing. When the status reaches complete or failed, calls
- * router.refresh() so the parent server component re-fetches facts and the
- * processing banner disappears without a full page navigation.
+ * is pending or processing. When the status reaches complete it calls
+ * router.refresh() so the parent server component re-fetches facts. When the
+ * status is failed it shows a "Try again" action that re-runs the pipeline via
+ * POST /api/people/[id]/reprocess and resumes polling — so a failed run is
+ * recoverable in-place instead of leaving the user stranded.
  */
 export function ProcessingIndicator({ personId, initialStatus }: Props) {
   const [status, setStatus] = useState(initialStatus);
+  const [retrying, setRetrying] = useState(false);
   const router = useRouter();
 
+  // Poll whenever the status is non-terminal. Keyed on `status` so that a
+  // retry (which sets status back to 'processing') restarts the poll loop.
   useEffect(() => {
-    // Don't start polling if the status is already terminal on mount
-    // (or after router.refresh() passes a new initialStatus).
-    if (initialStatus === 'complete' || initialStatus === 'failed') return;
+    if (isTerminal(status)) return;
 
     const intervalId = setInterval(async () => {
       try {
@@ -31,10 +36,12 @@ export function ProcessingIndicator({ personId, initialStatus }: Props) {
         const data: { status: string } = await res.json();
         setStatus(data.status);
 
-        if (data.status === 'complete' || data.status === 'failed') {
+        if (data.status === 'complete') {
           clearInterval(intervalId);
           // Refresh the server component so extracted facts appear immediately.
           router.refresh();
+        } else if (data.status === 'failed') {
+          clearInterval(intervalId);
         }
       } catch {
         // Network error — keep polling silently.
@@ -42,15 +49,42 @@ export function ProcessingIndicator({ personId, initialStatus }: Props) {
     }, 3000);
 
     return () => clearInterval(intervalId);
-  }, [personId, initialStatus, router]);
+  }, [personId, status, router]);
+
+  const handleRetry = useCallback(async () => {
+    setRetrying(true);
+    try {
+      const res = await fetch(`/api/people/${personId}/reprocess`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        // Resume polling — the effect restarts because status changes.
+        setStatus('processing');
+      }
+    } catch {
+      // Leave the failed state in place; the user can retry again.
+    } finally {
+      setRetrying(false);
+    }
+  }, [personId]);
 
   if (status === 'complete') return null;
 
   if (status === 'failed') {
     return (
-      <p className="mt-1 text-sm text-red-500">
-        Processing failed — try re-submitting this person&apos;s notes.
-      </p>
+      <div className="mt-1 flex flex-col items-center gap-1.5">
+        <p className="text-sm text-red-500">
+          Processing failed — we couldn&apos;t finish reading these notes.
+        </p>
+        <button
+          type="button"
+          onClick={handleRetry}
+          disabled={retrying}
+          className="rounded-full border border-red-300 px-3 py-1 text-sm text-red-600 disabled:opacity-50"
+        >
+          {retrying ? 'Retrying…' : 'Try again'}
+        </button>
+      </div>
     );
   }
 

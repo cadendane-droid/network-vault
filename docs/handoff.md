@@ -7,6 +7,82 @@
 
 ---
 
+## 0. Intake / extraction pipeline reliability fix (2026-06-16)
+
+Self-contained record of the production "infinite Processing… spinner" fix. Read
+this section alone to act on it.
+
+### Confirmed root cause (static analysis — no live DB/creds used)
+
+The **extract job left sources stuck in `processing` forever on any failure in
+its middle steps.** `processing_status` was only set to `'failed'` in two places
+(the source/person null-check and the `call-claude` try/catch). Steps 3–8 —
+`validate`, `resolve-people`, `write-facts`, `write-edges`, `write-conversation`,
+`mark-complete` — had **no failure handling**. If any threw, Inngest exhausted
+retries and the function died **without** moving the source out of `processing`.
+Result: silent infinite spinner, `mark-complete` and the `processing_completed`
+event never reached. This matches PostHog exactly (`person_added` /
+`source_submitted` fire; `processing_completed` almost never does).
+
+Two intermittent triggers for such a throw (explains "1 of 3 completed"):
+- **Fragile validation** — `validateExtractionOutput` did `for (const f of result.facts)` / `result.edges` with **no array guard**; a Claude response with `facts: null` or a missing key threw `… is not iterable` inside the unguarded `validate` step.
+- **Claude JSON truncation** — `extractFromSource` used `max_tokens: 4096`; a rich note (the lost beta user) overflowed it → truncated, unparseable JSON.
+
+**The embedding-dimension hypothesis was NOT the cause.** Schema, generated
+client, and migration `20260605000000_voyage_embeddings` already use
+`vector(1024)`, matching `voyage-3`. The only `1536` reference was a stale
+comment. **No migration was required — Phase 4 skipped.** (Even if the column
+were wrong, embed failure could not have caused the spinner, because the
+*extract* job owned the `complete` write that clears it.)
+
+### What changed and why
+
+| File | Change |
+|------|--------|
+| `src/inngest/functions/extract.ts` | **Added `onFailure` handler** → sets `processing_status='failed'` after retries exhaust (the actual root-cause fix; guarantees a terminal status on every path). Removed the redundant inline `failed` updates (onFailure covers them). Moved the terminal `complete` write + `processing_completed` event **out** of extract — extract now just hands off to embed via `vault/facts.extracted`, forwarding `person_id` + `facts_count`/`edges_count`. Added structured `[extract]` stage logging. |
+| `src/inngest/functions/embed.ts` | **Added `onFailure` handler** (same terminal-status guarantee). Embed now **owns the `complete` write + `processing_completed`** — the *true* end of processing (extraction **and** embedding done). Logs each embedded fact's vector dimension. Fixed stale `vector(1536)` comment → `1024`. |
+| `src/lib/claude.ts` | `extractFromSource`: `max_tokens` 4096→**8192**; explicit **`stop_reason==='max_tokens'` truncation error**; concatenates all text blocks; robust JSON extraction (`parseExtractionJson` slices to outermost braces, throws descriptive errors). `embedText`: exported `EMBEDDING_DIMENSIONS=1024` and a **dimension guard** that throws on mismatch. |
+| `src/lib/validation/extraction.ts` | **Array guard**: `facts`/`edges` default to `[]` (flagged in `invalid`) instead of throwing when Claude returns a non-array. |
+| `src/components/processing-indicator.tsx` | `failed` state now shows a **"Try again" button** that POSTs to the owner reprocess endpoint and resumes polling (poll effect re-keyed on `status` so retry restarts it). This is the change that would have saved the lost user. |
+| `src/app/(app)/people/[id]/page.tsx` | Suppress the "No facts extracted yet" empty state when status is `failed` (avoids mixed messaging next to the retry button). |
+| `src/lib/reprocess.ts` *(new)* | `reprocessSource({sourceId, personId, userId})` — deletes any partial writes for the source (conv-participants → conversations → edges → facts), resets to `processing`, re-sends `vault/person.created`. Idempotent; prevents duplicate facts on re-run. |
+| `src/app/api/people/[id]/reprocess/route.ts` *(new)* | Owner-scoped retry (used by the UI button). Re-runs the owner's most recent source (same V1 heuristic as the status route). |
+| `src/app/api/admin/reprocess/route.ts` *(new)* | Admin-only (`ADMIN_CLERK_IDS`) recovery for **any** user's stuck source. Body `{ source_id, person_id }`. Use this to recover the existing stuck beta user. |
+
+### Behavior change to know
+
+`complete` (and the spinner clearing) now happens **after embedding**, not after
+extraction. So an **embed** failure now flips the source to `failed` even though
+extract wrote facts (facts still render on the profile; only semantic search is
+degraded until reprocess). This is intentional — "complete" now means
+genuinely query-ready.
+
+### Recover the existing stuck beta user
+
+Option A — admin endpoint (signed in as an `ADMIN_CLERK_IDS` user):
+```bash
+curl -X POST https://<host>/api/admin/reprocess \
+  -H 'Content-Type: application/json' \
+  -b '<authenticated session cookie>' \
+  -d '{"source_id":"<stuck-source-uuid>","person_id":"<person-uuid>"}'
+```
+Option B — manual event re-send: after deleting any partial facts/edges for that
+`source_id`, send `vault/person.created` with `{person_id, source_id, user_id}`
+from the Inngest dashboard.
+
+### Verification checklist (run with env vars present — `vercel env pull` or a preview deploy)
+
+1. Confirm the column is already `vector(1024)` (no migration needed):
+   `psql "$DIRECT_URL" -c "\d facts"` → `embedding | vector(1024)`. If it shows `1536`, the `20260605` migration was never applied — run `npx prisma migrate deploy`.
+2. Add a test person with a rich, long note. In the Inngest dashboard, both `extract-person-facts` and `embed-person-facts` runs succeed (no retries/errors). `[extract]`/`[embed]` log lines show stage progress.
+3. `SELECT count(*) FROM facts WHERE source_id='…' AND embedding IS NOT NULL;` > 0, and a pgvector cosine query returns rows.
+4. `processing_status` reaches `complete`; `processing_completed` fires in PostHog.
+5. A natural-language query returns an attributed answer.
+6. Force a failure (e.g. temporarily set a bad `VOYAGE_API_KEY`, or submit a deliberately adversarial note) → source reaches `failed`, the profile shows **"Processing failed… / Try again"** instead of spinning. Click "Try again" → it reprocesses.
+7. Run the admin reprocess against the real stuck source → it completes.
+
+---
+
 ## 1a. Steps Completed — Previous Session (2026-06-06)
 
 | Step | Summary |
@@ -270,9 +346,12 @@ Pass `ref={fgRef}` to `<ForceGraph2D>`. The following ARE typed direct props and
 
 Previously an issue with pgvector cosine distance. No longer relevant — the full-context approach sends all facts to Claude, so alias queries ("a16z" vs "Andreessen Horowitz") now resolve correctly.
 
-### `processing_status` reaches `complete` before embeddings are written
+### ~~`processing_status` reaches `complete` before embeddings are written~~ (resolved 2026-06-16)
 
-Extract job marks `complete` before firing `vault/facts.extracted`. Embed job runs asynchronously. This no longer affects query accuracy (queries use full vault context, not embeddings), but it does affect the shared-interest edge computation in `embed.ts` — shared_interest edges may appear slightly after the status indicator clears. Wait a few seconds after the indicator clears before checking the network view in the Step 52 smoke test.
+As of the §0 pipeline fix, the **embed** job now owns the `complete` write, so
+`complete` only happens after embeddings *and* shared-interest edges are written.
+The status indicator no longer clears ahead of the network view. (Trade-off: an
+embed failure now flips the source to `failed` — see §0 "Behavior change".)
 
 ### Source → person linking is user-scoped, not person-scoped
 
@@ -402,3 +481,41 @@ Before or during Step 52, run the preview SELECT in `scripts/cleanup-ghost-peopl
 | `20260612090000_add_feedback` | hand-written SQL + `migrate deploy` |
 
 **Future migrations:** hand-write `prisma/migrations/<timestamp>_<name>/migration.sql`, then `npx prisma migrate deploy` + `npx prisma generate`. Never `migrate dev` (shadow DB lacks pgvector). `migrate deploy` is simpler than the older `db execute` + `migrate resolve` flow and keeps the history table in sync automatically.
+
+---
+
+## 9. Preview verification plan — intake pipeline fix (2026-06-16)
+
+**Branch:** `fix/intake-pipeline-failure` (pushed to `cadendane-droid/network-vault`). Pushing it triggers a Vercel preview automatically — find the URL in the Vercel dashboard → Deployments → this branch.
+
+**Verify script:** `npx tsx scripts/verify-pipeline.ts <email-or-personId>`
+- Pass a `people.id` UUID to check one person, or an email to check all of that user's people.
+- Needs `DATABASE_URL` in env (`vercel env pull` writes `.env.local`, which the script auto-loads).
+- Prints PASS/FAIL for: latest source `processing_status='complete'`; fact count > 0; zero NULL embeddings; embedding dimension = 1024. Exits non-zero on any FAIL. Read-only.
+
+### Manual checklist (run against the PREVIEW, in order)
+
+**0. Check the preview's database first.** Confirm whether the Vercel **preview** env points at the **production Supabase** or a separate DB (check `DATABASE_URL`/`DIRECT_URL` for the Preview environment in Vercel project settings). **If it shares prod, every test record lands in prod** — so use a **throwaway test account/email** for all testing below, and do **not** reprocess Bridget's real record until step 5.
+
+**1. Happy path.** Sign in with the test account; add a person with a deliberately long, rich **~250-word** note mentioning a role, an org, a location, two interests, and a connection to another named person (representative of the real failure — a long note was the likely 4096-token-overflow trigger).
+- Inngest dashboard: both `extract-person-facts` (`extractPersonFacts`) and `embed-person-facts` (`embedPersonFacts`) runs succeed, no terminal failure.
+- `npx tsx scripts/verify-pipeline.ts <test-personId>` → all PASS.
+- PostHog: `processing_completed` fires.
+- A natural-language query returns an attributed answer.
+
+**2. Forced failure.** Add a person with a garbage or oversized note intended to break extraction. Confirm the source flips to `failed` and the UI shows the **"Processing failed… / Try again"** state (not an endless spinner). Click **Try again** → it reprocesses and resumes polling.
+
+**3. Reprocess (no duplicate facts).** On a stuck/failed **test** record, trigger the reprocess path (the UI button, or `POST /api/people/[id]/reprocess`). Confirm it reaches `complete` and the verify script shows a **sane, non-doubled** fact count.
+
+**4. Loose thread — confirm the diagnosis with runtime evidence.** In the Inngest dashboard, open the run history for Bridget's **original** failed `vault/person.created` job (**June 13, ~15:51 UTC**). Read which step threw — confirm it was `validate` or a `write-*` step, and note whether that input would have exceeded the old **4096**-token ceiling. This turns the diagnosis from "plausible" to "confirmed."
+
+**5. Production recovery (ONLY after 1–4 pass).** Merge to `main`, deploy, then reprocess Bridget's **real** source via the admin endpoint:
+```bash
+curl -X POST https://<prod-host>/api/admin/reprocess \
+  -H 'Content-Type: application/json' \
+  -b '<authenticated admin session cookie>' \
+  -d '{"source_id":"<bridget-source-uuid>","person_id":"<bridget-person-uuid>"}'
+```
+Then `npx tsx scripts/verify-pipeline.ts <bridget-email-or-personId>` → expect all PASS.
+
+**Production gates left to the operator:** merging to `main`, deploying to prod, running the verify script against a live DB, and reprocessing any real user's record (Bridget included) are all steps 5 / manual — not done from this machine.

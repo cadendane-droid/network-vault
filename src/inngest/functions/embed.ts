@@ -1,21 +1,50 @@
 import { inngest } from '@/inngest/client';
 import prisma from '@/lib/prisma';
 import { embedText } from '@/lib/claude';
+import { captureServerEvent } from '@/lib/posthog-server';
+
+function log(stage: string, data: Record<string, unknown>) {
+  console.log(`[embed] ${stage} ${JSON.stringify(data)}`);
+}
 
 export const embedPersonFacts = inngest.createFunction(
   {
     id: 'embed-person-facts',
     name: 'Embed facts for semantic search',
     triggers: [{ event: 'vault/facts.extracted' }],
+    // Terminal-status guarantee, same as the extract job: if embedding fails
+    // after all retries, move the source to 'failed' so the UI surfaces it and
+    // a reprocess can recover it. (Facts written by extract remain visible on
+    // the profile; only semantic search is degraded until reprocess.)
+    onFailure: async ({ event, error, step }) => {
+      const original = event.data.event.data as { source_id?: string };
+      const source_id = original?.source_id;
+      console.error(
+        `[embed] FAILED ${JSON.stringify({ source_id, error: error.message })}`
+      );
+      if (source_id) {
+        await step.run('mark-failed', () =>
+          prisma.source.update({
+            where: { id: source_id },
+            data: { processing_status: 'failed' },
+          })
+        );
+      }
+    },
   },
   async ({ event, step }) => {
-    const { source_id, user_id } = event.data as {
-      source_id: string;
-      user_id: string;
-    };
+    const { person_id, source_id, user_id, facts_count, edges_count } =
+      event.data as {
+        person_id: string;
+        source_id: string;
+        user_id: string;
+        facts_count?: number;
+        edges_count?: number;
+      };
+    log('start', { person_id, source_id, user_id });
 
     // ── Step 1: Fetch unembedded facts for this source ──────────────────────
-    // Raw query required — embedding is Unsupported("vector(1536)") and
+    // Raw query required — embedding is Unsupported("vector(1024)") and
     // cannot be used in Prisma's findMany where clause.
     const facts = await step.run(
       'fetch-facts',
@@ -26,6 +55,7 @@ export const embedPersonFacts = inngest.createFunction(
         AND embedding IS NULL
       `
     );
+    log('facts-to-embed', { source_id, count: facts.length });
 
     // ── Step 2: Embed each fact — one step.run per fact ─────────────────────
     // Each fact is its own Inngest step so failures are retried independently.
@@ -34,14 +64,16 @@ export const embedPersonFacts = inngest.createFunction(
     // Raw SQL required for the write — prisma.fact.update errors on Unsupported fields.
     let embedded = 0;
     for (const fact of facts) {
-      await step.run(`embed-fact-${fact.id}`, async () => {
+      const dim = await step.run(`embed-fact-${fact.id}`, async () => {
         const vector = await embedText(fact.value);
         await prisma.$executeRaw`
           UPDATE facts
           SET embedding = ${JSON.stringify(vector)}::vector
           WHERE id = ${fact.id}::uuid
         `;
+        return vector.length;
       });
+      log('embedded-fact', { source_id, fact_id: fact.id, dim });
       embedded++;
     }
 
@@ -101,8 +133,10 @@ export const embedPersonFacts = inngest.createFunction(
       }
     );
 
-    // ── Step 4: Safety update ────────────────────────────────────────────────
-    // Source is already 'complete' from the extract job — this is a no-op guard.
+    // ── Step 4: Mark source complete — the true end of processing ────────────
+    // Both extraction and embedding have now succeeded. This is the only place
+    // a source becomes 'complete', so the spinner only clears when the profile
+    // is genuinely query-ready.
     await step.run('mark-complete', () =>
       prisma.source.update({
         where: { id: source_id },
@@ -110,6 +144,29 @@ export const embedPersonFacts = inngest.createFunction(
       })
     );
 
+    // ── Step 5: Analytics ────────────────────────────────────────────────────
+    // Distinct ID must be the Clerk ID — that's what the browser client
+    // identifies with — so look it up from the DB user id in the event.
+    await step.run('capture-processing-completed', async () => {
+      const dbUser = await prisma.user.findUnique({
+        where: { id: user_id },
+        select: { clerk_id: true },
+      });
+      await captureServerEvent(
+        dbUser?.clerk_id ?? user_id,
+        'processing_completed',
+        {
+          person_id,
+          source_id,
+          facts_count: facts_count ?? null,
+          edges_count: edges_count ?? null,
+          embedded,
+          shared_interests_count: sharedInterestsCreated,
+        }
+      );
+    });
+
+    log('complete', { source_id, embedded, sharedInterestsCreated });
     return { source_id, embedded, sharedInterestsCreated };
   }
 );

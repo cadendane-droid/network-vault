@@ -71,11 +71,24 @@ export function validateExtractionOutput(
 ): ValidationResult {
   const invalid: InvalidItem[] = [];
 
+  // Shape guard: Claude is instructed to always return facts/edges arrays, but
+  // it occasionally returns null or omits a key. Default to empty arrays and
+  // flag the anomaly rather than throwing — a single malformed response must
+  // never crash the extract job (which would leave the source stuck forever).
+  const facts = Array.isArray(result.facts) ? result.facts : [];
+  const edges = Array.isArray(result.edges) ? result.edges : [];
+  if (!Array.isArray(result.facts)) {
+    invalid.push({ item: result.facts, reason: 'facts was not an array' });
+  }
+  if (!Array.isArray(result.edges)) {
+    invalid.push({ item: result.edges, reason: 'edges was not an array' });
+  }
+
   // ── Facts ──────────────────────────────────────────────────────────────────
 
   const validFacts: ExtractionResult['facts'] = [];
 
-  for (const f of result.facts) {
+  for (const f of facts) {
     // Rule 1: non-empty required fields
     if (!f.person_name?.trim() || !f.type?.trim() || !f.value?.trim()) {
       invalid.push({
@@ -128,7 +141,7 @@ export function validateExtractionOutput(
 
   const validEdges: ExtractionResult['edges'] = [];
 
-  for (const e of result.edges) {
+  for (const e of edges) {
     // Rule 1 (edges): non-empty fields
     if (
       !e.person_a?.trim() ||

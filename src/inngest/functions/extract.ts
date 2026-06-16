@@ -4,13 +4,36 @@ import { extractFromSource, type SourceKind } from '@/lib/claude';
 import { EXTRACTION_SYSTEM_PROMPT } from '@/lib/prompts/extraction';
 import { validateExtractionOutput } from '@/lib/validation/extraction';
 import { invalidateContext } from '@/lib/vault-cache';
-import { captureServerEvent } from '@/lib/posthog-server';
+
+// Structured, greppable logging — one line per pipeline stage so a failure is
+// diagnosable straight from the Inngest/Vercel logs without a replay.
+function log(stage: string, data: Record<string, unknown>) {
+  console.log(`[extract] ${stage} ${JSON.stringify(data)}`);
+}
 
 export const extractPersonFacts = inngest.createFunction(
   {
     id: 'extract-person-facts',
     name: 'Extract facts from person source',
     triggers: [{ event: 'vault/person.created' }],
+    // Terminal-status guarantee: this runs exactly once after the function has
+    // exhausted all retries. No matter which step threw, the source is moved
+    // out of 'processing' into 'failed' so the UI never spins forever.
+    onFailure: async ({ event, error, step }) => {
+      const original = event.data.event.data as { source_id?: string };
+      const source_id = original?.source_id;
+      console.error(
+        `[extract] FAILED ${JSON.stringify({ source_id, error: error.message })}`
+      );
+      if (source_id) {
+        await step.run('mark-failed', () =>
+          prisma.source.update({
+            where: { id: source_id },
+            data: { processing_status: 'failed' },
+          })
+        );
+      }
+    },
   },
   async ({ event, step }) => {
     const { person_id, source_id, user_id } = event.data as {
@@ -18,6 +41,7 @@ export const extractPersonFacts = inngest.createFunction(
       source_id: string;
       user_id: string;
     };
+    log('start', { person_id, source_id, user_id });
 
     // ── Step 1: Fetch source and primary person ─────────────────────────────
     const { source, primaryPerson } = await step.run(
@@ -37,44 +61,42 @@ export const extractPersonFacts = inngest.createFunction(
       }
     );
 
+    // A throw here is caught by onFailure, which marks the source 'failed'.
     if (!source || !primaryPerson) {
-      await prisma.source.update({
-        where: { id: source_id },
-        data: { processing_status: 'failed' },
-      });
       throw new Error(
         `Source or person not found — source=${source_id} person=${person_id}`
       );
     }
 
     // ── Step 2: Call Claude ─────────────────────────────────────────────────
-    let extraction: Awaited<ReturnType<typeof extractFromSource>>;
-    try {
-      extraction = await step.run('call-claude', () =>
-        extractFromSource(
-          source.raw_text,
-          source.kind as SourceKind,
-          EXTRACTION_SYSTEM_PROMPT,
-          primaryPerson.name // lets Claude resolve pronouns to the right name
-        )
-      );
-    } catch (err) {
-      await prisma.source.update({
-        where: { id: source_id },
-        data: { processing_status: 'failed' },
-      });
-      throw err;
-    }
+    const extraction = await step.run('call-claude', () =>
+      extractFromSource(
+        source.raw_text,
+        source.kind as SourceKind,
+        EXTRACTION_SYSTEM_PROMPT,
+        primaryPerson.name // lets Claude resolve pronouns to the right name
+      )
+    );
+    log('claude-done', {
+      source_id,
+      raw_facts: Array.isArray(extraction.facts) ? extraction.facts.length : 0,
+      raw_edges: Array.isArray(extraction.edges) ? extraction.edges.length : 0,
+    });
 
     // ── Step 3: Validate ────────────────────────────────────────────────────
     const { validFacts, validEdges, invalid } = await step.run('validate', () =>
       validateExtractionOutput(extraction, source.kind as SourceKind)
     );
+    log('validated', {
+      source_id,
+      valid_facts: validFacts.length,
+      valid_edges: validEdges.length,
+      invalid: invalid.length,
+    });
 
     if (invalid.length > 0) {
       console.warn(
-        `[extract] ${invalid.length} invalid item(s) skipped for source ${source_id}:`,
-        invalid
+        `[extract] ${invalid.length} invalid item(s) skipped for source ${source_id}: ${JSON.stringify(invalid)}`
       );
     }
 
@@ -190,7 +212,7 @@ export const extractPersonFacts = inngest.createFunction(
           select: { id: true },
         });
 
-        const participants = extraction.conversation!.participants;
+        const participants = extraction.conversation!.participants ?? [];
         if (participants.length > 0) {
           const participantData = participants
             .map((name) => ({
@@ -209,38 +231,21 @@ export const extractPersonFacts = inngest.createFunction(
       });
     }
 
-    // ── Step 8: Mark source complete ────────────────────────────────────────
-    await step.run('mark-complete', () =>
-      prisma.source.update({
-        where: { id: source_id },
-        data: { processing_status: 'complete' },
-      })
-    );
+    log('written', { source_id, factsWritten, edgesWritten });
 
-    // ── Step 9: Analytics ────────────────────────────────────────────────────
-    // Distinct ID must be the Clerk ID — that's what the browser client
-    // identifies with — so look it up from the DB user id in the event.
-    await step.run('capture-processing-completed', async () => {
-      const dbUser = await prisma.user.findUnique({
-        where: { id: user_id },
-        select: { clerk_id: true },
-      });
-      await captureServerEvent(
-        dbUser?.clerk_id ?? user_id,
-        'processing_completed',
-        {
-          person_id,
-          source_id,
-          facts_count: factsWritten,
-          edges_count: edgesWritten,
-        }
-      );
-    });
-
-    // Fire embed event — Step 32's job picks this up when registered
+    // Hand off to the embed job. Embedding is the *true end* of processing, so
+    // the embed job owns the terminal `processing_status = 'complete'` write
+    // and the `processing_completed` analytics event. We forward person_id and
+    // the counts so embed can emit a complete event without re-deriving them.
     await step.sendEvent('send-embed-event', {
       name: 'vault/facts.extracted',
-      data: { source_id, user_id },
+      data: {
+        person_id,
+        source_id,
+        user_id,
+        facts_count: factsWritten,
+        edges_count: edgesWritten,
+      },
     });
 
     // Invalidate the vault context cache so the next query reflects the
