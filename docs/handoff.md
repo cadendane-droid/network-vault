@@ -519,3 +519,76 @@ curl -X POST https://<prod-host>/api/admin/reprocess \
 Then `npx tsx scripts/verify-pipeline.ts <bridget-email-or-personId>` → expect all PASS.
 
 **Production gates left to the operator:** merging to `main`, deploying to prod, running the verify script against a live DB, and reprocessing any real user's record (Bridget included) are all steps 5 / manual — not done from this machine.
+
+---
+
+## 10. Inngest stale-deployment-URL fix (2026-06-17)
+
+Worked directly on `main` (no feature branch). Not pushed — operator will push.
+
+### Symptom
+
+After fixing event delivery (the bad `INNGEST_BASE_URL` that redirected sends to
+almura.app was deleted, so runs now appear in the Inngest dashboard), every run
+**failed before executing any step**: it went straight from start → Finalization
+(the `onFailure` handler), with no `fetch-source`/`call-claude`/etc. in between.
+The `onFailure` handler itself also failed, repeatedly. Expanding the error
+showed **`DEPLOYMENT_NOT_FOUND` — "The deployment could not be found on Vercel."**
+
+Net user-visible effect: `processing_status` never left `processing`; infinite
+spinner. (This is a *transport* failure, separate from the §0 logic fix — the
+functions were never actually entered, so none of the §0 step logic ran.)
+
+### Root cause
+
+Inngest invokes functions by calling back to the serve URL it recorded at
+registration time. `serve()` in `src/app/api/inngest/route.ts` had **no
+`serveOrigin`**, so it inferred the origin from the incoming request's `Host`
+header. On Vercel, the sync/registration request arrives at the **per-deployment
+URL** (`network-vault-<hash>.vercel.app`), not the stable domain. That URL is
+replaced on every new deploy, so the recorded callback URL goes stale — Inngest
+then calls a deployment that no longer exists and gets `DEPLOYMENT_NOT_FOUND`
+before any step (or even the failure handler) can run.
+
+### Fix
+
+`src/app/api/inngest/route.ts` — pass `serveOrigin` to `serve()`, pinned to the
+stable production domain on Vercel production:
+
+```ts
+const serveOrigin =
+  process.env.INNGEST_SERVE_ORIGIN ??
+  (process.env.VERCEL_ENV === 'production' ? 'https://www.almura.app' : undefined);
+
+export const { GET, POST, PUT } = serve({
+  client: inngest,
+  functions: [extractPersonFacts, embedPersonFacts],
+  serveOrigin,
+});
+```
+
+- In Inngest 4.5.0 the option is **`serveOrigin`** (the older `serveHost` was
+  renamed). It overrides the inferred origin used when registering/invoking, so
+  Inngest always calls back to `https://www.almura.app` regardless of which
+  deployment handled the sync.
+- Guarded on `VERCEL_ENV === 'production'` so local `inngest dev` and preview
+  deploys still auto-infer their own origin (a hardcoded value would make the
+  local dev server try to call the live site).
+- `INNGEST_SERVE_ORIGIN` is an optional escape hatch to override the host
+  without a code change (e.g. to pin a preview).
+
+No function logic, prompts, or database code changed. `tsc --noEmit` and
+`eslint` pass.
+
+### After deploy — verify
+
+1. Deploy `main` to production.
+2. Trigger a re-sync so Inngest records the new origin: in the Inngest dashboard
+   re-sync the app, or hit `PUT https://www.almura.app/api/inngest` (Vercel's
+   Inngest integration also syncs automatically on deploy). Confirm the app's
+   registered URL now reads `https://www.almura.app/api/inngest`, not a
+   `*.vercel.app` hash URL.
+3. Add a test person. The Inngest run should now execute steps
+   (`fetch-source` → `call-claude` → …) instead of jumping to Finalization, and
+   reach a terminal status. No more `DEPLOYMENT_NOT_FOUND`.
+4. `processing_status` reaches `complete`; spinner clears.
