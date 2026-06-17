@@ -5,23 +5,10 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { PERSON_LIMIT } from '@/lib/limits';
 
-const SOURCE_KINDS = [
-  { value: 'conversation', label: 'Conversation' },
-  { value: 'note', label: 'Note' },
-  { value: 'profile', label: 'Profile' },
-  { value: 'observation', label: 'Observation' },
-] as const;
-
-function todayISODate() {
-  return new Date().toISOString().split('T')[0];
-}
-
 export default function AddPersonForm() {
   const router = useRouter();
 
   const [name, setName] = useState('');
-  const [sourceKind, setSourceKind] = useState<string>('note');
-  const [sourceDate, setSourceDate] = useState(todayISODate());
   const [rawText, setRawText] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,8 +26,6 @@ export default function AddPersonForm() {
         body: JSON.stringify({
           name: name.trim(),
           raw_text: rawText.trim(),
-          source_kind: sourceKind,
-          source_date: sourceDate,
         }),
       });
 
@@ -86,47 +71,6 @@ export default function AddPersonForm() {
           required
           disabled={submitting}
           className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2.5 text-base text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900 disabled:opacity-50"
-        />
-      </div>
-
-      {/* Source kind */}
-      <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor="source-kind"
-          className="text-sm font-medium text-zinc-700"
-        >
-          Source type
-        </label>
-        <select
-          id="source-kind"
-          value={sourceKind}
-          onChange={(e) => setSourceKind(e.target.value)}
-          disabled={submitting}
-          className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2.5 text-base text-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-900 disabled:opacity-50"
-        >
-          {SOURCE_KINDS.map((k) => (
-            <option key={k.value} value={k.value}>
-              {k.label}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* Date */}
-      <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor="source-date"
-          className="text-sm font-medium text-zinc-700"
-        >
-          Date
-        </label>
-        <input
-          id="source-date"
-          type="date"
-          value={sourceDate}
-          onChange={(e) => setSourceDate(e.target.value)}
-          disabled={submitting}
-          className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2.5 text-base text-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-900 disabled:opacity-50"
         />
       </div>
 

@@ -592,3 +592,46 @@ No function logic, prompts, or database code changed. `tsc --noEmit` and
    (`fetch-source` → `call-claude` → …) instead of jumping to Finalization, and
    reach a terminal status. No more `DEPLOYMENT_NOT_FOUND`.
 4. `processing_status` reaches `complete`; spinner clears.
+
+---
+
+## 11. Remove source-kind (and date) from Add Person form (2026-06-17)
+
+### Product decision
+
+The Add Person form previously asked the user to pick a **Source type**
+(Conversation / Note / Profile / Observation) and a **Date**. Both add friction
+for no user benefit — the system should infer everything from the raw text. The
+form now collects **only Name + Notes**. (Confirmed with the operator that the
+Date picker should be removed too, not just the source-kind selector.)
+
+### What changed and why
+
+| File | Change |
+|------|--------|
+| `src/components/add-person-form.tsx` | Removed the **Source type** `<select>` and the **Date** `<input>`, their `useState` (`sourceKind`, `sourceDate`), the `SOURCE_KINDS` constant, and the `todayISODate()` helper. The POST body now sends only `{ name, raw_text }`. |
+| `src/app/api/people/route.ts` | The route used to **400-reject** any submission whose `source_kind` wasn't one of the four valid kinds — so dropping the field from the form would have broken every submit. Replaced that hard rejection with a default: `const kind: SourceKind = isValidKind(source_kind) ? source_kind : 'note'`. `kind` is used for both `source.create` calls and the `person_added` analytics prop. The route still defensively accepts `source_kind`/`source_date` if a client sends them (backward compatible); `source_date` already defaulted to "now" when absent. |
+
+### Why `'note'` is the default
+
+`'note'` is the most generic of the four kinds. Downstream, `source.kind` is read
+only by the **extraction logic** (unchanged): a non-`conversation` kind means the
+extractor skips the conversation summary/participants block and the validator
+rejects `quote`-type facts. Defaulting to `'note'` therefore yields clean
+general-purpose extraction with no special-casing — exactly the "system handles
+the rest" behavior.
+
+### Not changed (per scope)
+
+- **No database schema / migration changes.** The `sources.kind` column and its
+  values are untouched; existing rows keep their original kind.
+- **No extraction logic or prompt changes.** `src/lib/claude.ts`,
+  `src/lib/prompts/extraction.ts`, `src/lib/validation/extraction.ts`, and the
+  Inngest functions are untouched.
+
+### Verify
+
+- Add a person with just a name + notes → submission succeeds (no 400), source
+  row is created with `kind = 'note'`, and the pipeline runs through to
+  `complete` as normal.
+- `tsc --noEmit` and `eslint` both pass.

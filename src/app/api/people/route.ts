@@ -55,12 +55,11 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
-  if (!isValidKind(source_kind)) {
-    return NextResponse.json(
-      { error: `source_kind must be one of: ${VALID_KINDS.join(', ')}` },
-      { status: 400 }
-    );
-  }
+  // Source kind is no longer collected from the user — the Add Person form
+  // captures only name + notes. Default to 'note' (the most generic kind) so
+  // the pipeline behaves consistently. A valid kind is still honoured if a
+  // client happens to send one, for backward compatibility.
+  const kind: SourceKind = isValidKind(source_kind) ? source_kind : 'note';
 
   // Daily upload cap — applies to every source submission, before any write.
   const now = new Date();
@@ -118,7 +117,7 @@ export async function POST(request: NextRequest) {
     const source = await prisma.source.create({
       data: {
         user_id: user.userId,
-        kind: source_kind,
+        kind,
         raw_text: raw_text.trim(),
         date,
       },
@@ -135,7 +134,7 @@ export async function POST(request: NextRequest) {
       const source = await tx.source.create({
         data: {
           user_id: user.userId,
-          kind: source_kind,
+          kind,
           raw_text: raw_text.trim(),
           date,
         },
@@ -147,7 +146,7 @@ export async function POST(request: NextRequest) {
 
     await captureServerEvent(user.clerkId, 'person_added', {
       person_id: personId,
-      source_kind,
+      source_kind: kind,
     });
   }
 
