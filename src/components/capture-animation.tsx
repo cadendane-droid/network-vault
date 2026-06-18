@@ -20,7 +20,11 @@ const loadFeatures = () =>
 // ---------------------------------------------------------------------------
 const HOLD_MS = 1000; // t=0 → 1s: no movement
 const FLOAT_MS = 3000; // t=1s → 4s: fold + travel to centre
-const SETTLE_MS = 350; // after arrival + navigation, before the overlay fades
+// Push to /network this many ms BEFORE the float ends, so the constellation is
+// already mounting + fading in (see globals.css .nv-fade-in) as the node lands —
+// the destination is present to receive it instead of hard-cutting in.
+const PUSH_LEAD_MS = 900;
+const SETTLE_MS = 250; // after arrival + navigation, before the overlay fades
 const FADE_MS = 350; // overlay cross-fade hand-off to the canvas node
 
 // Final node size at centre (px). Matches the small constellation node scale.
@@ -89,6 +93,10 @@ export function CaptureProvider({ children }: { children: React.ReactNode }) {
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const personIdRef = useRef<string | null>(null);
   const floatStartedRef = useRef(false);
+  // Opens shortly before the float ends; gates the push so the route changes
+  // during the float's tail (overlapping the destination's fade-in) rather than
+  // at float start. Under reduced motion the gate is bypassed.
+  const navGateRef = useRef(false);
   const navigatedRef = useRef(false);
 
   const clearTimers = () => {
@@ -100,6 +108,7 @@ export function CaptureProvider({ children }: { children: React.ReactNode }) {
     clearTimers();
     personIdRef.current = null;
     floatStartedRef.current = false;
+    navGateRef.current = false;
     navigatedRef.current = false;
     setNavigated(false);
     setPhase('idle');
@@ -108,11 +117,12 @@ export function CaptureProvider({ children }: { children: React.ReactNode }) {
 
   // Navigate exactly once, and never without a resolved person id. Under
   // reduced motion we go as soon as the id lands; otherwise we wait until the
-  // float has begun so the route transition happens behind the moving node.
+  // nav gate opens (near the end of the float) so the route changes during the
+  // float's tail and the destination fades in to receive the node.
   const navigate = useCallback(() => {
     if (navigatedRef.current) return;
     if (!personIdRef.current) return;
-    if (!reduceRef.current && !floatStartedRef.current) return;
+    if (!reduceRef.current && !navGateRef.current) return;
     navigatedRef.current = true;
     setNavigated(true);
     router.push(`/network?new=${personIdRef.current}`);
@@ -139,6 +149,7 @@ export function CaptureProvider({ children }: { children: React.ReactNode }) {
       reset();
       navigatedRef.current = false;
       floatStartedRef.current = false;
+      navGateRef.current = false;
       personIdRef.current = null;
 
       const vw = window.innerWidth;
@@ -178,9 +189,14 @@ export function CaptureProvider({ children }: { children: React.ReactNode }) {
       const t1 = setTimeout(() => {
         floatStartedRef.current = true;
         setPhase('float');
-        navigate(); // go now if the id already landed during the hold
+        // Open the nav gate near the end of the float so the push (and the
+        // destination's fade-in) overlaps the float's tail.
+        const tPush = setTimeout(() => {
+          navGateRef.current = true;
+          navigate(); // push now if the id is ready; else navigate() on resolve
+        }, FLOAT_MS - PUSH_LEAD_MS);
         const t2 = setTimeout(() => setPhase('arrived'), FLOAT_MS);
-        timers.current.push(t2);
+        timers.current.push(tPush, t2);
       }, HOLD_MS);
       timers.current.push(t1);
     },

@@ -151,7 +151,13 @@ export default async function NetworkPage({
   }
 
   return (
-    <div style={{ height: 'calc(100dvh - var(--nav-height))' }}>
+    <div
+      // Fade the constellation in only when arriving from the capture hand-off
+      // (?new=), so the floated node lands on a present canvas — one continuous
+      // motion rather than a hard page cut.
+      className={newPersonId ? 'nv-fade-in' : undefined}
+      style={{ height: 'calc(100dvh - var(--nav-height))' }}
+    >
       <Constellation newPersonId={newPersonId ?? null} />
       <FeedbackButton />
     </div>

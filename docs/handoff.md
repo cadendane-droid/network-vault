@@ -778,3 +778,120 @@ retry.
 
 - `tsc --noEmit` ✅, `eslint` ✅ (one pre-existing unrelated warning in `auth.ts`), Turbopack compile ✅.
 - Manual (needs env): add a person → button shows "Saving…", ~1s hold, ~3s fold/float, lands on `/network` with the new node pulsing at centre **before** extraction finishes; on completion its edges fade in (from the 2nd person onward). Slow POST → node holds at centre, navigates only when the id arrives. Failed extraction → "Try again" at the node, no permanent spinner. `prefers-reduced-motion` → no float, lands correctly, node pulses (static halo).
+
+> **Superseded by §14** — the opacity edge-fade, the permanent centre pin, and the hard route cut described above were refined on 2026-06-18. See §14 for the current behaviour.
+
+---
+
+## 14. Capture animation refinement — smooth transition, node settle, edge growth (2026-06-18)
+
+Refines §13's three rough edges (felt as choppy on device): the hard route cut,
+the node staying pinned at centre, and edges fading in by opacity. No data /
+write / poll / POST logic changed — presentation + timing only. The
+reduced-motion path and the slow-POST hold and failed→retry behaviours are
+preserved.
+
+### 1. Smooth route transition — destination-fade (not View Transitions)
+
+**Chosen approach: fade the *destination* in + push during the float's tail.**
+App Router can't animate the *outgoing* segment across a navigation (it unmounts
+before motion can run), so a true crossfade of the old page is impractical.
+`document.startViewTransition` was considered but rejected for V1: it needs a
+feature-detect + graceful fallback (older iOS Safari lacks it) and the
+destination-fade already reads as one motion. Easy to add later if desired.
+
+Two coordinated changes:
+- **`capture-animation.tsx`** — the push now fires **`PUSH_LEAD_MS` (900ms)
+  before the float ends**, not at float start. A new `navGateRef` gates
+  `navigate()`: the gate opens on a timer at `FLOAT_MS - PUSH_LEAD_MS` after the
+  float begins, then calls `navigate()` (which still no-ops until the person id
+  has resolved — slow-POST hold intact). So `/network` mounts while the floated
+  node is in the last ~900ms of its travel.
+- **`globals.css` + `network/page.tsx`** — the constellation wrapper gets
+  `className="nv-fade-in"` **only when `?new=` is present**, running
+  `@keyframes nvfadein` (opacity 0→1 over `--dur-slow`, `--ease-out`). The
+  canvas eases in underneath the descending node. The keyframe is disabled under
+  `prefers-reduced-motion`.
+
+**Cross-component timing contract:** the constellation keeps the new node pinned
+at centre for `HANDOFF_HOLD_MS` (1200ms) so it doesn't move while the overlay is
+still handing off. **Keep `HANDOFF_HOLD_MS ≥ PUSH_LEAD_MS + FADE_MS`** (1200 ≥
+900 + 350) — i.e. the canvas node stays put until after the DOM overlay node has
+finished fading onto it.
+
+### 2. Centre → rest travel (release + gentle reheat)
+
+`react-force-graph` positions are emergent — you can't precompute the rest spot.
+So:
+- The new node is spawned **pinned** at graph origin `fx=fy=0` (lands at centre,
+  matching the overlay hand-off), exactly as before.
+- A new effect releases the pin **after `HANDOFF_HOLD_MS`** (`fx=fy=undefined`)
+  and calls **`gentleReheat()`** so the node eases out to its **edgeless** rest
+  and settles. (Previously the pin was only released +900ms *after completion*,
+  so the node sat pinned the whole time — the symptom.)
+- When edges arrive on completion, `refetchGraph()` calls `gentleReheat()` again
+  so the node **re-adjusts toward its neighbours** without snapping.
+
+**`gentleReheat()` mechanism:** raise `d3VelocityDecay` (friction) from the base
+`0.2` to `SETTLE_VELOCITY_DECAY` (0.45) via a **state-driven prop**, call
+`fgRef.current.d3ReheatSimulation()`, then restore the base friction after
+`SETTLE_COOL_MS` (1500ms). Higher friction tempers the reheat so motion glides
+rather than springs, and because the existing nodes are already at equilibrium
+they barely shift. (`d3AlphaTarget(<low>)` is available on the handle as an
+alternative/finer knob if the device pass wants a gentler warm-hold — noted but
+not used, to avoid the alpha=1 restart jump.)
+
+**Halo + caption now track the node.** Because the node travels, the pulsing
+halo + caption can't be pinned to screen centre. They're wrapped in a single
+absolutely-positioned div (`affordanceRef`) whose `transform` is rewritten every
+frame from `fgRef.current.graph2ScreenCoords(node.x, node.y)` in a `requestAnimationFrame`
+loop (direct DOM writes — no per-frame React re-render). The halo follows the
+node whether it's pinned, travelling, or settled.
+
+### 3. Edge growth (draw-progress, not opacity)
+
+The `linkColor` alpha ramp (+ the `withAlpha` helper) is **removed**. Edges are
+now drawn by a custom **`linkCanvasObject`** (`linkCanvasObjectMode='replace'`):
+- All edges are drawn manually, preserving the existing styling — confirmed =
+  solid `EDGE_CONFIRMED`, inferred = dashed `EDGE_INFERRED`; `lineWidth` and dash
+  lengths divided by `globalScale` for constant apparent size (the ctx is
+  pre-scaled to graph coords, same convention as `nodeCanvasObject`).
+- **New** edges (flagged in `newEdgeKeys` by `refetchGraph`) **grow from the new
+  node outward**: the draw endpoint is interpolated from the new-node end toward
+  the neighbour over `DRAW_MS` (750ms) with `easeOutCubic`, and each new edge is
+  offset by `STAGGER_MS` (120ms) × index so multiple edges draw in sequence. The
+  growth anchor flips based on whether the new node is the link's `source` or
+  `target`.
+- `linkLabel` (hover tooltip) is unchanged. The reheat from `gentleReheat()`
+  provides the repaints that drive the draw.
+
+### Reduced motion
+
+`prefers-reduced-motion` is detected in the constellation (`matchMedia`, kept in
+`reduceMotionRef` for the canvas callbacks). When set: the **pin is never
+released** (node stays where it landed — no travel), `linkCanvasObject` draws all
+edges at full length (no growth), the `.nv-pulse-ring` and `.nv-fade-in`
+keyframes are disabled (static halo, instant page), and the capture overlay float
+is skipped (as in §13). Net: land, static pulse, edges simply present.
+
+### Tuning knobs (all named constants — adjust after the device pass)
+
+| Constant | File | Default | Controls |
+|----------|------|---------|----------|
+| `PUSH_LEAD_MS` | `capture-animation.tsx` | 900 | How long before float-end the route pushes (float/destination overlap). |
+| `FLOAT_MS` / `HOLD_MS` | `capture-animation.tsx` | 3000 / 1000 | Float travel + initial hold (from §13). |
+| `SETTLE_MS` / `FADE_MS` | `capture-animation.tsx` | 250 / 350 | Overlay settle-then-fade after arrival. |
+| `HANDOFF_HOLD_MS` | `constellation.tsx` | 1200 | How long the canvas node stays pinned at centre before travelling. **Keep ≥ `PUSH_LEAD_MS + FADE_MS`.** |
+| `DRAW_MS` / `STAGGER_MS` | `constellation.tsx` | 750 / 120 | Per-edge draw duration / stagger between edges. |
+| `SETTLE_VELOCITY_DECAY` / `BASE_VELOCITY_DECAY` | `constellation.tsx` | 0.45 / 0.2 | Friction during the settle vs. base physics (higher = gentler glide). |
+| `SETTLE_COOL_MS` | `constellation.tsx` | 1500 | How long raised friction is held before restoring base. |
+
+### Files touched
+
+`src/components/capture-animation.tsx` (push-lead gate), `src/components/constellation.tsx`
+(reduce-motion detect, pin-release travel, gentleReheat, halo tracking,
+`linkCanvasObject` edge growth), `src/app/(app)/network/page.tsx`
+(`nv-fade-in` class), `src/app/globals.css` (`nvfadein` keyframe + reduced-motion
+rule). `tsc --noEmit` ✅, `eslint` ✅ (pre-existing `auth.ts` warning only),
+Turbopack compile ✅. **Final judgment is a device pass** — these are felt, not
+typecheck-able.

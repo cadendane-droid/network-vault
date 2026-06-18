@@ -86,19 +86,28 @@ function edgeKey(link: GraphLink): string {
   return `${s}|${t}|${link.relationship_type}`;
 }
 
-// Scale the alpha of an existing `rgba(r,g,b,a)` string by `factor` (0–1), used
-// to fade newly-arrived edges in. Falls back to the original string if it isn't
-// in the expected rgba form.
-function withAlpha(rgba: string, factor: number): string {
-  const m = rgba.match(/rgba?\(([^)]+)\)/);
-  if (!m) return rgba;
-  const parts = m[1].split(',').map((p) => p.trim());
-  const [r, g, b] = parts;
-  const a = parts[3] != null ? parseFloat(parts[3]) : 1;
-  return `rgba(${r}, ${g}, ${b}, ${(a * factor).toFixed(3)})`;
-}
-
 const isTerminal = (s: string) => s === 'complete' || s === 'failed';
+
+const nowMs = () =>
+  typeof performance !== 'undefined' ? performance.now() : Date.now();
+
+// ── New-node animation tuning knobs (see docs/handoff.md §14) ───────────────
+// Keep the new node pinned at centre until the capture overlay has finished its
+// hand-off, THEN release it to travel. Must be ≥ capture-animation's
+// (PUSH_LEAD_MS + FADE_MS) so the canvas node doesn't move while the DOM
+// overlay node is still fading onto it.
+const HANDOFF_HOLD_MS = 1200;
+// Edge draw-in: each new edge grows from the new node over DRAW_MS, staggered.
+const DRAW_MS = 750;
+const STAGGER_MS = 120;
+// Gentle settle: raise friction (velocityDecay) during the release/edge reheat
+// so the node eases to rest instead of snapping, then restore the base value.
+const BASE_VELOCITY_DECAY = 0.2; // matches the prior physics
+const SETTLE_VELOCITY_DECAY = 0.45;
+const SETTLE_COOL_MS = 1500;
+
+// easeOutCubic — used for edge draw-progress.
+const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
 
 // ---------------------------------------------------------------------------
 // Component
@@ -132,10 +141,23 @@ export default function Constellation({ onNodeClick, newPersonId }: Props) {
     newPersonId ? 'processing' : null
   );
   const [retrying, setRetrying] = useState(false);
-  // Edge keys added by the post-completion refetch, plus when the fade began —
-  // read by linkColor each frame to ramp their alpha in (~0.7s).
+  // Friction is raised transiently during the release/edge-arrival reheats so
+  // the new node eases into place (a tuning knob, driven as a prop).
+  const [velocityDecay, setVelocityDecay] = useState(BASE_VELOCITY_DECAY);
+  // Edges added by the post-completion refetch + when the draw started + each
+  // edge's stagger offset — read by linkCanvasObject to grow them in.
   const newEdgeKeys = useRef<Set<string>>(new Set());
+  const edgeStagger = useRef<Map<string, number>>(new Map());
   const edgeAnimStart = useRef<number>(0);
+  // Live mirror of nodes for timers/rAF that run outside the render cycle.
+  const nodesRef = useRef<GraphNode[]>([]);
+  const coolTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Wrapper for the pulsing halo + caption; positioned each frame onto the
+  // new node's screen coords so the affordance follows it as it travels.
+  const affordanceRef = useRef<HTMLDivElement>(null);
+  // prefers-reduced-motion — skips travel + edge growth (edges appear whole).
+  const [reduceMotion, setReduceMotion] = useState(false);
+  const reduceMotionRef = useRef(false);
 
   // Measure container
   useEffect(() => {
@@ -197,6 +219,77 @@ export default function Constellation({ onNodeClick, newPersonId }: Props) {
     return () => clearTimeout(id);
   }, [newPersonId, loading, dimensions.width]);
 
+  // Keep a live mirror of nodes for the off-render timers/rAF below.
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
+
+  // prefers-reduced-motion.
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => {
+      setReduceMotion(mq.matches);
+      reduceMotionRef.current = mq.matches;
+    };
+    update();
+    mq.addEventListener('change', update);
+    return () => mq.removeEventListener('change', update);
+  }, []);
+
+  // Gentle reheat: raise friction so motion eases rather than snaps, nudge the
+  // simulation, then restore the base friction after it has settled.
+  const gentleReheat = useCallback(() => {
+    setVelocityDecay(SETTLE_VELOCITY_DECAY);
+    fgRef.current?.d3ReheatSimulation?.();
+    if (coolTimerRef.current) clearTimeout(coolTimerRef.current);
+    coolTimerRef.current = setTimeout(
+      () => setVelocityDecay(BASE_VELOCITY_DECAY),
+      SETTLE_COOL_MS
+    );
+  }, []);
+
+  // Release the centre pin after the overlay hand-off completes, so the node
+  // travels from centre to its (edgeless) resting place and settles. Skipped
+  // under reduced motion — the node stays put where it landed.
+  useEffect(() => {
+    if (!newPersonId || loading || reduceMotion) return;
+    const id = setTimeout(() => {
+      const nn = nodesRef.current.find((n) => n.id === newPersonId);
+      if (nn) {
+        nn.fx = undefined;
+        nn.fy = undefined;
+      }
+      gentleReheat();
+    }, HANDOFF_HOLD_MS);
+    return () => clearTimeout(id);
+  }, [newPersonId, loading, reduceMotion, gentleReheat]);
+
+  // Track the new node's screen position each frame so the pulsing halo +
+  // caption follow it as it travels. Direct DOM writes (no per-frame re-render).
+  useEffect(() => {
+    if (!newPersonId || newStatus === 'complete') return;
+    let raf = 0;
+    const tick = () => {
+      const el = affordanceRef.current;
+      const nn = nodesRef.current.find((n) => n.id === newPersonId);
+      const fg = fgRef.current;
+      if (el && nn && nn.x != null && nn.y != null && fg?.graph2ScreenCoords) {
+        const { x, y } = fg.graph2ScreenCoords(nn.x, nn.y);
+        el.style.transform = `translate(${x}px, ${y}px)`;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [newPersonId, newStatus]);
+
+  // Clean up the cool-down timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (coolTimerRef.current) clearTimeout(coolTimerRef.current);
+    };
+  }, []);
+
   // Re-pull the graph after extraction, preserving node positions so the layout
   // doesn't jump, and flag the brand-new edges for the fade-in ramp.
   const refetchGraph = useCallback(() => {
@@ -212,13 +305,19 @@ export default function Constellation({ onNodeClick, newPersonId }: Props) {
         setLinks((prev) => {
           const oldKeys = new Set(prev.map(edgeKey));
           const fresh = new Set<string>();
+          const stagger = new Map<string, number>();
+          let i = 0;
           for (const ed of e) {
             const k = edgeKey(ed);
-            if (!oldKeys.has(k)) fresh.add(k);
+            if (!oldKeys.has(k)) {
+              fresh.add(k);
+              stagger.set(k, i * STAGGER_MS);
+              i++;
+            }
           }
           newEdgeKeys.current = fresh;
-          edgeAnimStart.current =
-            typeof performance !== 'undefined' ? performance.now() : Date.now();
+          edgeStagger.current = stagger;
+          edgeAnimStart.current = nowMs();
           return e;
         });
         setNodes((prev) => {
@@ -230,6 +329,8 @@ export default function Constellation({ onNodeClick, newPersonId }: Props) {
               nn.y = old.y;
               nn.vx = old.vx;
               nn.vy = old.vy;
+              // Preserve the pin only if it's still held (release is governed by
+              // the HANDOFF_HOLD_MS timer, not by completion).
               if (old.fx != null) {
                 nn.fx = old.fx;
                 nn.fy = old.fy;
@@ -238,25 +339,14 @@ export default function Constellation({ onNodeClick, newPersonId }: Props) {
             return nn;
           });
         });
-        // Reheat so the added edges actually repaint during the fade window.
-        fgRef.current?.d3ReheatSimulation?.();
-        // Release the new node's pin shortly after so it eases into the layout.
-        setTimeout(() => {
-          setNodes((prev) =>
-            prev.map((p) => {
-              if (p.id !== newPersonId) return p;
-              p.fx = undefined;
-              p.fy = undefined;
-              return p;
-            })
-          );
-          fgRef.current?.d3ReheatSimulation?.();
-        }, 900);
+        // Gentle reheat so the new edges grow in and the node re-adjusts toward
+        // its neighbours without snapping.
+        gentleReheat();
       })
       .catch(() => {
         // Keep the existing graph on a refetch failure.
       });
-  }, [newPersonId]);
+  }, [gentleReheat]);
 
   // Poll the new node's processing status. On completion, refetch the graph and
   // fade in any new edges; on failure, surface a retry affordance (no spinner).
@@ -434,36 +524,77 @@ export default function Constellation({ onNodeClick, newPersonId }: Props) {
             ctx.fillStyle = LABEL_COLOR;
             ctx.fillText(n.name, n.x, n.y + radius + 2);
           }}
-          // Edge styling — confirmed vs inferred, with a fade-in ramp for any
-          // edges that just arrived from the post-completion refetch.
-          linkColor={(link) => {
+          // Edges drawn manually so freshly-arrived ones can GROW from the new
+          // node outward (draw-progress) rather than fade in. Keeps the
+          // confirmed (solid) vs inferred (dashed) styling of the default
+          // renderer. Widths/dashes divided by globalScale for constant
+          // apparent size (ctx is pre-scaled to graph coords).
+          linkCanvasObjectMode={() => 'replace'}
+          linkCanvasObject={(link, ctx, globalScale) => {
             const l = link as GraphLink;
-            const base =
-              l.status === 'inferred' ? EDGE_INFERRED : EDGE_CONFIRMED;
+            const src = l.source as GraphNode;
+            const tgt = l.target as GraphNode;
             if (
-              newEdgeKeys.current.size > 0 &&
+              src?.x == null ||
+              src?.y == null ||
+              tgt?.x == null ||
+              tgt?.y == null
+            )
+              return;
+
+            const inferred = l.status === 'inferred';
+
+            // Draw-progress for new edges (skipped under reduced motion).
+            let progress = 1;
+            if (
+              !reduceMotionRef.current &&
               newEdgeKeys.current.has(edgeKey(l))
             ) {
-              const now =
-                typeof performance !== 'undefined'
-                  ? performance.now()
-                  : Date.now();
-              const p = Math.min(1, (now - edgeAnimStart.current) / 700);
-              return withAlpha(base, p);
+              const stg = edgeStagger.current.get(edgeKey(l)) ?? 0;
+              const elapsed = nowMs() - edgeAnimStart.current - stg;
+              if (elapsed <= 0) return; // not yet started — nothing to draw
+              progress = Math.min(1, elapsed / DRAW_MS);
             }
-            return base;
+
+            // Anchor the growth at the new node so the line draws outward.
+            let ax = src.x;
+            let ay = src.y;
+            let bx = tgt.x;
+            let by = tgt.y;
+            if (
+              progress < 1 &&
+              tgt.id === newPersonId &&
+              src.id !== newPersonId
+            ) {
+              ax = tgt.x;
+              ay = tgt.y;
+              bx = src.x;
+              by = src.y;
+            }
+            if (progress < 1) {
+              const e = easeOut(progress);
+              bx = ax + (bx - ax) * e;
+              by = ay + (by - ay) * e;
+            }
+
+            ctx.save();
+            ctx.strokeStyle = inferred ? EDGE_INFERRED : EDGE_CONFIRMED;
+            ctx.lineWidth = 1.5 / globalScale;
+            ctx.setLineDash(inferred ? [4 / globalScale, 4 / globalScale] : []);
+            ctx.beginPath();
+            ctx.moveTo(ax, ay);
+            ctx.lineTo(bx, by);
+            ctx.stroke();
+            ctx.restore();
           }}
-          linkWidth={1.5}
-          linkLineDash={(link) =>
-            (link as GraphLink).status === 'inferred' ? [4, 4] : null
-          }
           linkLabel={(link) =>
             (link as GraphLink).relationship_type.replace(/_/g, ' ')
           }
-          // Physics — unchanged from previous session
+          // Physics — base values from the prior session; velocityDecay is
+          // raised transiently during the new-node settle (see gentleReheat).
           ref={fgRef}
           d3AlphaDecay={0.02}
-          d3VelocityDecay={0.2}
+          d3VelocityDecay={velocityDecay}
           warmupTicks={100}
           cooldownTicks={200}
           onNodeClick={(node) => {
@@ -477,16 +608,30 @@ export default function Constellation({ onNodeClick, newPersonId }: Props) {
         />
       )}
 
-      {/* New-node processing / failed affordance — centred on the pinned node */}
+      {/* New-node processing / failed affordance — the wrapper is positioned
+          each frame onto the node's screen coords (see the rAF effect) so the
+          halo + caption follow the node as it travels. */}
       {newPersonId && newStatus && newStatus !== 'complete' && (
-        <>
-          {/* Pulsing halo behind the node (static under reduced motion) */}
+        <div
+          ref={affordanceRef}
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            // Initial guess = canvas centre (where the node lands); the rAF
+            // loop takes over from the first frame.
+            transform: `translate(${dimensions.width / 2}px, ${dimensions.height / 2}px)`,
+            willChange: 'transform',
+            pointerEvents: 'none',
+          }}
+        >
+          {/* Pulsing halo on the node (static under reduced motion) */}
           <div
             className="nv-pulse-ring"
             style={{
               position: 'absolute',
-              left: '50%',
-              top: '50%',
+              left: 0,
+              top: 0,
               transform: 'translate(-50%, -50%)',
               width: 56,
               height: 56,
@@ -494,16 +639,15 @@ export default function Constellation({ onNodeClick, newPersonId }: Props) {
               background:
                 newStatus === 'failed' ? 'var(--berry-500)' : 'var(--brand)',
               boxShadow: 'var(--glow-brand)',
-              pointerEvents: 'none',
             }}
           />
 
-          {/* Caption / retry */}
+          {/* Caption / retry, just below the node */}
           <div
             style={{
               position: 'absolute',
-              left: '50%',
-              top: 'calc(50% + 52px)',
+              left: 0,
+              top: 36,
               transform: 'translateX(-50%)',
               width: 260,
               textAlign: 'center',
@@ -560,7 +704,7 @@ export default function Constellation({ onNodeClick, newPersonId }: Props) {
               </p>
             )}
           </div>
-        </>
+        </div>
       )}
 
       {/* Bottom sheet */}
