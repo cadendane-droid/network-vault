@@ -635,3 +635,33 @@ the rest" behavior.
   row is created with `kind = 'note'`, and the pipeline runs through to
   `complete` as normal.
 - `tsc --noEmit` and `eslint` both pass.
+
+---
+
+## 12. Raise free-account person limit to 30 (2026-06-17)
+
+### Product decision
+
+Bump the beta free-account cap on how many people a user can add from **15 → 30**
+(for now).
+
+### What changed and why
+
+| File | Change |
+|------|--------|
+| `src/lib/limits.ts` | `PERSON_LIMIT` changed from `15` to `30`. |
+
+`PERSON_LIMIT` is the single source of truth (the file comment says "change them
+here and nowhere else"). All three consumers read the constant directly — no
+hardcoded values anywhere — so this one-line change propagates everywhere:
+
+- `src/app/api/people/route.ts` — the API gate (`peopleCount >= PERSON_LIMIT`
+  → 402 `PEOPLE_LIMIT`) and the "`${PERSON_LIMIT}-person limit`" message.
+- `src/app/(app)/account/page.tsx` — the People usage bar (`limit: PERSON_LIMIT`).
+- `src/components/add-person-form.tsx` — the limit-reached banner copy.
+
+### Not changed
+
+No schema, migration, pipeline, or extraction changes. Other limits
+(`SOURCE_TEXT_LIMIT`, `DAILY_UPLOAD_LIMIT`, `DAILY_QUERY_LIMIT`,
+`MONTHLY_QUERY_LIMIT`) are untouched.
