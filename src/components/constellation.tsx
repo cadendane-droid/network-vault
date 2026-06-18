@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { usePostHog } from 'posthog-js/react';
@@ -23,8 +23,14 @@ export interface GraphNode {
   hasConfirmedFacts: boolean;
   role: string | null;
   org: string | null;
+  // Simulation fields managed by react-force-graph (x/y) plus the pin (fx/fy)
+  // and velocity (vx/vy) we set/preserve for the new-node hand-off.
   x?: number;
   y?: number;
+  fx?: number;
+  fy?: number;
+  vx?: number;
+  vy?: number;
 }
 
 export interface GraphLink {
@@ -72,15 +78,43 @@ function paletteIdx(name: string): number {
   return Math.abs(h) % 5;
 }
 
+// Stable key for an edge across both wire shape (string ids) and the post-
+// simulation shape (react-force-graph mutates source/target into node objects).
+function edgeKey(link: GraphLink): string {
+  const s = typeof link.source === 'string' ? link.source : link.source.id;
+  const t = typeof link.target === 'string' ? link.target : link.target.id;
+  return `${s}|${t}|${link.relationship_type}`;
+}
+
+// Scale the alpha of an existing `rgba(r,g,b,a)` string by `factor` (0–1), used
+// to fade newly-arrived edges in. Falls back to the original string if it isn't
+// in the expected rgba form.
+function withAlpha(rgba: string, factor: number): string {
+  const m = rgba.match(/rgba?\(([^)]+)\)/);
+  if (!m) return rgba;
+  const parts = m[1].split(',').map((p) => p.trim());
+  const [r, g, b] = parts;
+  const a = parts[3] != null ? parseFloat(parts[3]) : 1;
+  return `rgba(${r}, ${g}, ${b}, ${(a * factor).toFixed(3)})`;
+}
+
+const isTerminal = (s: string) => s === 'complete' || s === 'failed';
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
 interface Props {
   onNodeClick?: (personId: string) => void;
+  /**
+   * Person id arriving via /network?new=<id> from the capture animation. That
+   * node is spawned pinned at canvas centre with a pulsing halo; we poll its
+   * processing status and animate its edges in once extraction completes.
+   */
+  newPersonId?: string | null;
 }
 
-export default function Constellation({ onNodeClick }: Props) {
+export default function Constellation({ onNodeClick, newPersonId }: Props) {
   const posthog = usePostHog();
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -92,6 +126,16 @@ export default function Constellation({ onNodeClick }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
+
+  // ── New-node lifecycle (capture animation hand-off) ──────────────────────
+  const [newStatus, setNewStatus] = useState<string | null>(
+    newPersonId ? 'processing' : null
+  );
+  const [retrying, setRetrying] = useState(false);
+  // Edge keys added by the post-completion refetch, plus when the fade began —
+  // read by linkColor each frame to ramp their alpha in (~0.7s).
+  const newEdgeKeys = useRef<Set<string>>(new Set());
+  const edgeAnimStart = useRef<number>(0);
 
   // Measure container
   useEffect(() => {
@@ -124,6 +168,17 @@ export default function Constellation({ onNodeClick }: Props) {
         }>;
       })
       .then(({ nodes: n, edges: e }) => {
+        // Pin the freshly-added node at the graph origin (0,0) so it lands at
+        // canvas centre, matching where the capture overlay node fades out.
+        if (newPersonId) {
+          const np = n.find((x) => x.id === newPersonId);
+          if (np) {
+            np.fx = 0;
+            np.fy = 0;
+            np.x = 0;
+            np.y = 0;
+          }
+        }
         setNodes(n);
         setLinks(e);
         posthog?.capture('graph_opened', {
@@ -133,14 +188,129 @@ export default function Constellation({ onNodeClick }: Props) {
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [posthog]);
+  }, [posthog, newPersonId]);
+
+  // Centre the camera on the pinned new node once the graph is mounted.
+  useEffect(() => {
+    if (!newPersonId || loading || dimensions.width === 0) return;
+    const id = setTimeout(() => fgRef.current?.centerAt?.(0, 0, 0), 0);
+    return () => clearTimeout(id);
+  }, [newPersonId, loading, dimensions.width]);
+
+  // Re-pull the graph after extraction, preserving node positions so the layout
+  // doesn't jump, and flag the brand-new edges for the fade-in ramp.
+  const refetchGraph = useCallback(() => {
+    fetch('/api/graph')
+      .then((res) => {
+        if (!res.ok) throw new Error('Failed to load graph');
+        return res.json() as Promise<{
+          nodes: GraphNode[];
+          edges: GraphLink[];
+        }>;
+      })
+      .then(({ nodes: n, edges: e }) => {
+        setLinks((prev) => {
+          const oldKeys = new Set(prev.map(edgeKey));
+          const fresh = new Set<string>();
+          for (const ed of e) {
+            const k = edgeKey(ed);
+            if (!oldKeys.has(k)) fresh.add(k);
+          }
+          newEdgeKeys.current = fresh;
+          edgeAnimStart.current =
+            typeof performance !== 'undefined' ? performance.now() : Date.now();
+          return e;
+        });
+        setNodes((prev) => {
+          const byId = new Map(prev.map((o) => [o.id, o]));
+          return n.map((nn) => {
+            const old = byId.get(nn.id);
+            if (old) {
+              nn.x = old.x;
+              nn.y = old.y;
+              nn.vx = old.vx;
+              nn.vy = old.vy;
+              if (old.fx != null) {
+                nn.fx = old.fx;
+                nn.fy = old.fy;
+              }
+            }
+            return nn;
+          });
+        });
+        // Reheat so the added edges actually repaint during the fade window.
+        fgRef.current?.d3ReheatSimulation?.();
+        // Release the new node's pin shortly after so it eases into the layout.
+        setTimeout(() => {
+          setNodes((prev) =>
+            prev.map((p) => {
+              if (p.id !== newPersonId) return p;
+              p.fx = undefined;
+              p.fy = undefined;
+              return p;
+            })
+          );
+          fgRef.current?.d3ReheatSimulation?.();
+        }, 900);
+      })
+      .catch(() => {
+        // Keep the existing graph on a refetch failure.
+      });
+  }, [newPersonId]);
+
+  // Poll the new node's processing status. On completion, refetch the graph and
+  // fade in any new edges; on failure, surface a retry affordance (no spinner).
+  // Keyed on newStatus so a retry (→ 'processing') restarts the loop.
+  useEffect(() => {
+    if (!newPersonId || !newStatus || isTerminal(newStatus)) return;
+
+    const intervalId = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/people/${newPersonId}/status`);
+        if (!res.ok) return;
+        const data = (await res.json()) as { status: string };
+        if (data.status === 'complete') {
+          clearInterval(intervalId);
+          setNewStatus('complete');
+          refetchGraph();
+        } else if (data.status === 'failed') {
+          clearInterval(intervalId);
+          setNewStatus('failed');
+        }
+      } catch {
+        // Network blip — keep polling silently.
+      }
+    }, 3000);
+
+    return () => clearInterval(intervalId);
+  }, [newPersonId, newStatus, refetchGraph]);
+
+  const handleRetry = useCallback(async () => {
+    if (!newPersonId) return;
+    setRetrying(true);
+    try {
+      const res = await fetch(`/api/people/${newPersonId}/reprocess`, {
+        method: 'POST',
+      });
+      if (res.ok) setNewStatus('processing'); // restarts the poll effect
+    } catch {
+      // Leave the failed state; the user can retry again.
+    } finally {
+      setRetrying(false);
+    }
+  }, [newPersonId]);
 
   const graphData = useMemo(() => ({ nodes, links }), [nodes, links]);
+
+  const newNodeName = newPersonId
+    ? (nodes.find((n) => n.id === newPersonId)?.name ?? null)
+    : null;
 
   return (
     <div
       ref={containerRef}
       style={{
+        position: 'relative',
         width: '100%',
         height: '100%',
         background: `radial-gradient(ellipse at center, #2E2035 0%, ${BG_NIGHT} 100%)`,
@@ -264,12 +434,25 @@ export default function Constellation({ onNodeClick }: Props) {
             ctx.fillStyle = LABEL_COLOR;
             ctx.fillText(n.name, n.x, n.y + radius + 2);
           }}
-          // Edge styling — confirmed vs inferred
-          linkColor={(link) =>
-            (link as GraphLink).status === 'inferred'
-              ? EDGE_INFERRED
-              : EDGE_CONFIRMED
-          }
+          // Edge styling — confirmed vs inferred, with a fade-in ramp for any
+          // edges that just arrived from the post-completion refetch.
+          linkColor={(link) => {
+            const l = link as GraphLink;
+            const base =
+              l.status === 'inferred' ? EDGE_INFERRED : EDGE_CONFIRMED;
+            if (
+              newEdgeKeys.current.size > 0 &&
+              newEdgeKeys.current.has(edgeKey(l))
+            ) {
+              const now =
+                typeof performance !== 'undefined'
+                  ? performance.now()
+                  : Date.now();
+              const p = Math.min(1, (now - edgeAnimStart.current) / 700);
+              return withAlpha(base, p);
+            }
+            return base;
+          }}
           linkWidth={1.5}
           linkLineDash={(link) =>
             (link as GraphLink).status === 'inferred' ? [4, 4] : null
@@ -292,6 +475,92 @@ export default function Constellation({ onNodeClick }: Props) {
             }
           }}
         />
+      )}
+
+      {/* New-node processing / failed affordance — centred on the pinned node */}
+      {newPersonId && newStatus && newStatus !== 'complete' && (
+        <>
+          {/* Pulsing halo behind the node (static under reduced motion) */}
+          <div
+            className="nv-pulse-ring"
+            style={{
+              position: 'absolute',
+              left: '50%',
+              top: '50%',
+              transform: 'translate(-50%, -50%)',
+              width: 56,
+              height: 56,
+              borderRadius: '50%',
+              background:
+                newStatus === 'failed' ? 'var(--berry-500)' : 'var(--brand)',
+              boxShadow: 'var(--glow-brand)',
+              pointerEvents: 'none',
+            }}
+          />
+
+          {/* Caption / retry */}
+          <div
+            style={{
+              position: 'absolute',
+              left: '50%',
+              top: 'calc(50% + 52px)',
+              transform: 'translateX(-50%)',
+              width: 260,
+              textAlign: 'center',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 8,
+              pointerEvents: newStatus === 'failed' ? 'auto' : 'none',
+            }}
+          >
+            {newStatus === 'failed' ? (
+              <>
+                <p
+                  style={{
+                    margin: 0,
+                    fontFamily: 'var(--font-sans)',
+                    fontSize: 'var(--text-sm)',
+                    color: 'var(--berry-300)',
+                  }}
+                >
+                  Couldn&apos;t finish reading these notes.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleRetry}
+                  disabled={retrying}
+                  style={{
+                    borderRadius: 'var(--radius-pill)',
+                    border: '1px solid var(--berry-300)',
+                    background: 'transparent',
+                    color: 'var(--berry-300)',
+                    padding: '6px 16px',
+                    fontFamily: 'var(--font-sans)',
+                    fontSize: 'var(--text-sm)',
+                    cursor: retrying ? 'default' : 'pointer',
+                    opacity: retrying ? 0.5 : 1,
+                  }}
+                >
+                  {retrying ? 'Retrying…' : 'Try again'}
+                </button>
+              </>
+            ) : (
+              <p
+                style={{
+                  margin: 0,
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: 'var(--text-sm)',
+                  color: 'var(--star-dim)',
+                }}
+              >
+                {newNodeName
+                  ? `Adding ${newNodeName}…`
+                  : 'Adding to your constellation…'}
+              </p>
+            )}
+          </div>
+        </>
       )}
 
       {/* Bottom sheet */}

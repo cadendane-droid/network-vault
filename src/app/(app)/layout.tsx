@@ -2,6 +2,7 @@ import { auth, currentUser } from '@clerk/nextjs/server';
 import { redirect } from 'next/navigation';
 import prisma from '@/lib/prisma';
 import Nav from '@/components/nav';
+import { CaptureProvider } from '@/components/capture-animation';
 
 export default async function AppLayout({
   children,
@@ -28,18 +29,20 @@ export default async function AppLayout({
   });
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        minHeight: '100svh',
-        background: 'var(--surface-canvas)',
-      }}
-    >
-      <main style={{ flex: 1, paddingBottom: 'var(--nav-height)' }}>
-        {children}
-      </main>
-      <Nav />
-    </div>
+    <CaptureProvider>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: '100svh',
+          background: 'var(--surface-canvas)',
+        }}
+      >
+        <main style={{ flex: 1, paddingBottom: 'var(--nav-height)' }}>
+          {children}
+        </main>
+        <Nav />
+      </div>
+    </CaptureProvider>
   );
 }

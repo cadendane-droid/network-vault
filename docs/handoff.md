@@ -665,3 +665,116 @@ hardcoded values anywhere — so this one-line change propagates everywhere:
 No schema, migration, pipeline, or extraction changes. Other limits
 (`SOURCE_TEXT_LIMIT`, `DAILY_UPLOAD_LIMIT`, `DAILY_QUERY_LIMIT`,
 `MONTHLY_QUERY_LIMIT`) are untouched.
+
+---
+
+## 13. Capture-to-constellation animation (2026-06-18)
+
+### Product decision
+
+Add Person used to POST then `router.push('/people/<id>')` — the **profile page**
+— where the user watched a "Processing…" spinner while the Inngest extract +
+embed jobs ran (several seconds). That made submit feel slow. The post-submit
+destination is now the **constellation** (`/network`): the submitted note visually
+**folds into a circular node and floats to canvas centre**, where it appears
+**optimistically** (before extraction finishes) and pulses; when the pipeline
+completes, its **edges animate in**. This masks intake latency. It is the V2
+"fold-into-circle" concept applied to the existing V1 person-node model.
+
+**Scope guard:** this is a client-side presentation + navigation change plus a
+status/graph poll. **No extraction, embedding, RLS, query, usage-counter, or API
+**write** logic changed.** `POST /api/people`, `/api/people/[id]/status`,
+`/api/people/[id]/reprocess`, and `/api/graph` are all consumed exactly as they
+already were. The profile page is still fully reachable (constellation node →
+bottom sheet → "View profile").
+
+### New dependency
+
+`motion@^12.40.0` (the framer-motion successor; peer-deps `react ^18 || ^19`,
+framework-agnostic so fine with Next 16). Used **only** for the DOM overlay
+float, via the **LazyMotion + `m`** pattern to keep the core bundle ~5kb and
+code-split the DOM animation features. The canvas edge-in is a custom
+react-force-graph link render (no motion).
+
+### New files
+
+| File | Purpose |
+|------|---------|
+| `src/components/capture-animation.tsx` | `'use client'`. `CaptureProvider` (context + fixed full-screen `pointer-events-none` overlay at `z-index:80`) and the `useCapture()` hook. Runs the timing sequence and owns navigation. |
+| `src/components/motion-features.ts` | `export default domAnimation` — the LazyMotion feature bundle, loaded on demand via `() => import('./motion-features')`. |
+
+### Changed files
+
+| File | Change |
+|------|--------|
+| `src/app/(app)/layout.tsx` | Wrapped the app shell (`<main>` + `<Nav>`) in `<CaptureProvider>`. The provider lives in the **persistent `(app)` layout** so the floating overlay **survives the `/people/new` → `/network` route change** (the whole point — it can't live in either page). |
+| `src/components/add-person-form.tsx` | On submit: capture the submit button's `getBoundingClientRect()` at tap time, fire `POST /api/people` immediately (t=0), and hand a `Promise<personId>` to `capture.start({ name, originRect, personIdPromise })` instead of `router.push('/people/<id>')`. All existing error/limit UX preserved (now via a `SubmitError` carrying the API error `code`, so the catch still special-cases `PEOPLE_LIMIT`). Removed the now-unused `useRouter`. Button label "Processing…" → "Saving…". |
+| `src/app/(app)/network/page.tsx` | Now reads `searchParams` (`Promise<{ new?: string }>`). When `?new=<id>` is present it renders `<Constellation>` **even below the 2-person threshold** (so the very first person has somewhere to land) and passes `newPersonId`. |
+| `src/components/constellation.tsx` | New optional prop `newPersonId`. Spawns that node **pinned at graph origin (0,0)** so it lands at canvas centre (`centerAt(0,0)`); shows a centred pulsing halo + caption while processing; polls status; on `complete` refetches `/api/graph` and **fades new edges in**; on `failed` shows an inline **Try again** affordance (no infinite spinner). See contract below. |
+| `src/app/globals.css` | Added `@keyframes nvpulse` + `.nv-pulse-ring` (the new-node halo) with a `prefers-reduced-motion` override that disables the animation. |
+
+### The capture-animation context API
+
+```ts
+const capture = useCapture();
+capture.start({
+  name: string,                    // optimistic node label (brand-neutral copy)
+  originRect: DOMRect | null,      // animation origin, captured at tap (t=0)
+  personIdPromise: Promise<string> // resolves with the created person id
+});
+```
+
+**Timing sequence** (constants at top of `capture-animation.tsx`):
+- **t=0** — form fires POST, captures `originRect`, calls `start()`. Button shows "Saving…".
+- **t=0 → 1s** (`HOLD_MS`) — node sits at origin as a rounded card, no movement.
+- **t=1s → 4s** (`FLOAT_MS`) — folds (rounded-rect → circle via % border-radius) and travels to canvas centre over 3s. The route push to `/network?new=<id>` happens here (behind the moving node) **once the id has resolved**.
+- **arrival** — node pulses (size keyframes) at centre.
+- **fade** — `SETTLE_MS` (350ms) after arrival *and* navigation, the overlay cross-fades out (`FADE_MS` 350ms); the constellation's own node is already pulsing at centre underneath. **Centre-to-centre hand-off** — no pixel-perfect DOM→canvas match attempted, by design.
+
+**Navigation guarantees:**
+- Navigation fires **exactly once** and **never without a resolved `personId`** (`navigate()` early-returns until `personIdRef` is set). Satisfies "slow POST holds the node at centre rather than navigating without an id" — if the id isn't back by t=4s, the node keeps pulsing at centre and the push happens the moment it resolves.
+- If `personIdPromise` **rejects** (validation / limit / network), the overlay **cancels itself** (`reset()`), timers cleared, and the form surfaces the error.
+
+**Reduced motion** (`useReducedMotion`): the float is **skipped** entirely (no overlay node rendered); navigation happens as soon as the id resolves, and the constellation's pulse is the only motion (the `.nv-pulse-ring` keyframe is itself disabled under `prefers-reduced-motion`, leaving a static halo).
+
+### The `?new=` contract on the network page
+
+`/network?new=<personId>` tells `<Constellation>` that `personId` is a freshly
+added node. The constellation:
+1. On the initial `/api/graph` fetch, finds that node and **pins it** (`fx=fy=0`, `x=y=0`) so it sits at graph origin, then `centerAt(0,0)` puts it at canvas centre. (The person row — hence the node — exists immediately after POST, with `factCount: 0`, since `/api/graph` returns all active people regardless of facts.)
+2. Initialises `newStatus='processing'` and **polls `/api/people/<id>/status`** every 3s (same heuristic as `ProcessingIndicator`).
+3. While non-terminal, renders a **centred pulsing halo + caption** ("Adding <name>…").
+4. On **`complete`**: calls `refetchGraph()` → re-pulls `/api/graph`, **preserves existing node positions by id** (so the layout doesn't jump), diffs edges to flag the brand-new ones, sets `edgeAnimStart`, reheats the simulation (`d3ReheatSimulation`), and releases the new node's pin ~900ms later so it eases into the layout. `linkColor` ramps the flagged edges' alpha 0→1 over ~700ms (`withAlpha` + `edgeKey` helpers). Halo/caption disappear.
+5. On **`failed`**: halo turns berry-toned and a **Try again** button POSTs `/api/people/<id>/reprocess`, then sets `newStatus='processing'` to **restart the poll loop** (the effect is keyed on `newStatus`).
+
+### Status-poll → graph-refetch → edge-animation flow (summary)
+
+`add-person-form` → `capture.start` → float → `router.push('/network?new=<id>')`
+→ `Constellation` spawns pinned centre node + pulse → poll `status` → on
+`complete` refetch `/api/graph`, fade edges in, release pin → on `failed` show
+retry.
+
+### Known limitations / follow-ups
+
+1. **Edge-in only fires from add #2 onward.** Person #1 has no edges, so there's
+   nothing to animate in for the first add — the node simply appears and pulses,
+   then settles on completion. **Expected**, not a bug.
+2. **User-scoped status route can misattribute completion on rapid back-to-back
+   adds.** `/api/people/[id]/status` returns the *most recent source for the
+   user*, not for that person (a documented V1 heuristic — see §4 "Source →
+   person linking"). Fine for the single-add flow this feature drives. **If
+   concurrent / batch adds ever ship, add a person-scoped status endpoint** (the
+   poll here would switch to it with no other change). Flagged as the follow-up.
+3. **Edge-in polish.** Current ramp is a linear alpha fade driven by the
+   simulation reheat window; a per-link draw-progress animation (line drawing
+   from source to target) would be richer. The custom `linkColor` ramp is the
+   acceptable-fallback fade called for in the spec.
+4. **`vault.app`/local build note (unrelated):** `npm run build` fails at *page
+   data collection* when `NEXT_PUBLIC_POSTHOG_KEY` is unset (module-scope
+   `new PostHog(key!)` in `src/lib/posthog-server.ts` throws). Pre-existing, not
+   introduced here — compilation, `tsc --noEmit`, and `eslint` all pass.
+
+### Verify
+
+- `tsc --noEmit` ✅, `eslint` ✅ (one pre-existing unrelated warning in `auth.ts`), Turbopack compile ✅.
+- Manual (needs env): add a person → button shows "Saving…", ~1s hold, ~3s fold/float, lands on `/network` with the new node pulsing at centre **before** extraction finishes; on completion its edges fade in (from the 2nd person onward). Slow POST → node holds at centre, navigates only when the id arrives. Failed extraction → "Try again" at the node, no permanent spinner. `prefers-reduced-motion` → no float, lands correctly, node pulses (static halo).

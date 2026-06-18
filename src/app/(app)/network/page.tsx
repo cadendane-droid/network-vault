@@ -5,7 +5,11 @@ import prisma from '@/lib/prisma';
 import Constellation from '@/components/constellation';
 import FeedbackButton from '@/components/feedback-button';
 
-export default async function NetworkPage() {
+export default async function NetworkPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ new?: string }>;
+}) {
   const { userId: clerkId } = await auth();
   if (!clerkId) redirect('/sign-in');
 
@@ -15,13 +19,18 @@ export default async function NetworkPage() {
   });
   if (!dbUser) redirect('/sign-in');
 
+  // `?new=<personId>` arrives from the capture animation after Add Person.
+  const { new: newPersonId } = await searchParams;
+
   // Count only active people — archived entries don't appear in the graph.
   const peopleCount = await prisma.people.count({
     where: { user_id: dbUser.id, status: 'active' },
   });
 
-  // The graph needs at least two nodes to be meaningful.
-  if (peopleCount < 2) {
+  // The graph needs at least two nodes to be meaningful — but when we've just
+  // landed here from an add (?new=), render the canvas even for the very first
+  // person so the new node has somewhere to settle and pulse.
+  if (peopleCount < 2 && !newPersonId) {
     return (
       <>
         <FeedbackButton />
@@ -143,7 +152,7 @@ export default async function NetworkPage() {
 
   return (
     <div style={{ height: 'calc(100dvh - var(--nav-height))' }}>
-      <Constellation />
+      <Constellation newPersonId={newPersonId ?? null} />
       <FeedbackButton />
     </div>
   );
