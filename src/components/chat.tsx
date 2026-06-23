@@ -25,6 +25,24 @@ export default function Chat() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // #14 — conversation thread identity. One conversation = one mounted Chat
+  // thread; navigating to /query afresh (remount) starts a new conversation_id
+  // and resets turn_index to 1. turn_index is 1-based, incremented per accepted
+  // submit; a "repeat query" is any query_asked with turn_index >= 2. Ids/index
+  // only — never the question text.
+  const conversationIdRef = useRef<string | null>(null);
+  const turnIndexRef = useRef(0);
+
+  function ensureConversationId() {
+    if (!conversationIdRef.current) {
+      conversationIdRef.current =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : generateId();
+    }
+    return conversationIdRef.current;
+  }
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -48,11 +66,21 @@ export default function Chat() {
     setInput('');
     setIsStreaming(true);
 
+    // #14 — stable per-thread id + 1-based turn index, passed to the server so
+    // the existing query_asked emit can attach them.
+    const conversationId = ensureConversationId();
+    turnIndexRef.current += 1;
+    const turnIndex = turnIndexRef.current;
+
     try {
       const res = await fetch('/api/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: trimmed }),
+        body: JSON.stringify({
+          question: trimmed,
+          conversation_id: conversationId,
+          turn_index: turnIndex,
+        }),
       });
 
       if (!res.ok || !res.body) {

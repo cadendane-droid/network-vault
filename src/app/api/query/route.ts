@@ -30,7 +30,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  const { question } = body as Record<string, unknown>;
+  const { question, conversation_id, turn_index } = body as Record<
+    string,
+    unknown
+  >;
   if (!question || typeof question !== 'string' || question.trim() === '') {
     return NextResponse.json(
       { error: 'question is required' },
@@ -110,8 +113,12 @@ export async function POST(request: NextRequest) {
       person: { user_id: user.userId, status: 'active' },
     },
   });
+  // #14 — thread context from the client (ids/index only, no query text). A
+  // "repeat query" is any query_asked with turn_index >= 2; no separate event.
   await captureServerEvent(user.clerkId, 'query_asked', {
     results_count: resultsCount,
+    ...(typeof conversation_id === 'string' ? { conversation_id } : {}),
+    ...(typeof turn_index === 'number' ? { turn_index } : {}),
   });
 
   // All gates passed and the vault is non-empty — the query is being served,

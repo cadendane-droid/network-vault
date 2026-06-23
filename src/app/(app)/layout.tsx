@@ -1,8 +1,8 @@
 import { auth, currentUser } from '@clerk/nextjs/server';
 import { redirect } from 'next/navigation';
-import prisma from '@/lib/prisma';
 import Nav from '@/components/nav';
 import { CaptureProvider } from '@/components/capture-animation';
+import { provisionUser } from '@/lib/provisionUser';
 
 export default async function AppLayout({
   children,
@@ -15,18 +15,10 @@ export default async function AppLayout({
     redirect('/sign-in');
   }
 
+  // Universal authenticated entry point — the single provisioning path
+  // (find-or-create + account_created on first create only) runs here.
   const clerkUser = await currentUser();
-  const email = clerkUser?.emailAddresses[0]?.emailAddress ?? '';
-
-  await prisma.user.upsert({
-    where: { clerk_id: clerkId },
-    update: {},
-    create: {
-      clerk_id: clerkId,
-      email,
-      plan: 'free',
-    },
-  });
+  await provisionUser(clerkId, clerkUser);
 
   return (
     <CaptureProvider>

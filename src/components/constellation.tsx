@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { usePostHog } from 'posthog-js/react';
+import { useCaptureTiming } from '@/components/capture-animation';
 
 // Dynamic import required — react-force-graph-2d accesses window, canvas, and
 // requestAnimationFrame at module load time.
@@ -125,7 +126,11 @@ interface Props {
 
 export default function Constellation({ onNodeClick, newPersonId }: Props) {
   const posthog = usePostHog();
+  const capture = useCaptureTiming();
   const containerRef = useRef<HTMLDivElement>(null);
+  // #13 node-visible / processing milestones — each fires at most once.
+  const nodeVisibleScheduledRef = useRef(false);
+  const procReportedRef = useRef(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const fgRef = useRef<any>(null);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
@@ -218,6 +223,30 @@ export default function Constellation({ onNodeClick, newPersonId }: Props) {
     const id = setTimeout(() => fgRef.current?.centerAt?.(0, 0, 0), 0);
     return () => clearTimeout(id);
   }, [newPersonId, loading, dimensions.width]);
+
+  // #13 ms_to_node_visible — the REAL canvas mount of the optimistic node: the
+  // graph has loaded (not loading, sized) and the new node is in the data, so
+  // ForceGraph2D is drawing it now. Fired on the next frame (after paint), once,
+  // in BOTH motion paths — this is the canvas mount, not the overlay animation.
+  useEffect(() => {
+    if (nodeVisibleScheduledRef.current) return;
+    if (!capture || !newPersonId || loading || dimensions.width === 0) return;
+    if (!nodes.some((n) => n.id === newPersonId)) return;
+    nodeVisibleScheduledRef.current = true;
+    requestAnimationFrame(() => capture.markNodeVisible(newPersonId));
+  }, [capture, newPersonId, loading, dimensions.width, nodes]);
+
+  // #13 ms_to_processing_complete — terminal processing state for the new
+  // person. 'complete' mirrors the server-side processing_completed; 'failed'
+  // resolves the delta as null. Fired once.
+  useEffect(() => {
+    if (procReportedRef.current) return;
+    if (!capture || !newPersonId) return;
+    if (newStatus === 'complete' || newStatus === 'failed') {
+      procReportedRef.current = true;
+      capture.markProcessingComplete(newPersonId, newStatus);
+    }
+  }, [capture, newPersonId, newStatus]);
 
   // Keep a live mirror of nodes for the off-render timers/rAF below.
   useEffect(() => {
@@ -602,7 +631,15 @@ export default function Constellation({ onNodeClick, newPersonId }: Props) {
             if (onNodeClick) {
               onNodeClick(n.id);
             } else {
+              // Limited-info bottom-sheet preview (distinct from navigating to
+              // the full profile, which fires profile_viewed). Ids/counts/bools
+              // only — never the node name.
               setSelectedNode(n);
+              posthog?.capture('node_preview_opened', {
+                person_id: n.id,
+                has_confirmed_facts: n.hasConfirmedFacts,
+                fact_count: n.factCount,
+              });
             }
           }}
         />

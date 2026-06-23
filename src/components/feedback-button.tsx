@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { usePostHog } from 'posthog-js/react';
 
 const MESSAGE_LIMIT = 2000;
 
@@ -16,6 +17,7 @@ export default function FeedbackButton() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [keyboardInset, setKeyboardInset] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const posthog = usePostHog();
 
   // Autofocus when the sheet opens.
   useEffect(() => {
@@ -93,7 +95,10 @@ export default function FeedbackButton() {
     <>
       {/* Pill — fixed lower-left, clear of the bottom nav */}
       <button
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          setOpen(true);
+          posthog?.capture('feedback_opened', { page: 'network' });
+        }}
         aria-label="Send feedback"
         style={{
           position: 'fixed',

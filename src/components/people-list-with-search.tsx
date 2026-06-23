@@ -1,7 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { usePostHog } from 'posthog-js/react';
 import PersonCard from '@/components/person-card';
+
+// Wait this long after the last keystroke before counting a search as
+// "settled" and emitting people_search_performed — so a single typed query
+// fires one event, not one per character.
+const SEARCH_DEBOUNCE_MS = 350;
 
 interface Person {
   id: string;
@@ -15,10 +21,28 @@ interface Person {
 export default function PeopleListWithSearch({ people }: { people: Person[] }) {
   const [query, setQuery] = useState('');
   const [focused, setFocused] = useState(false);
+  const posthog = usePostHog();
 
   const filtered = query.trim()
     ? people.filter((p) => p.name.toLowerCase().includes(query.toLowerCase()))
     : people;
+
+  // Fire people_search_performed once per settled query (debounced), suppressing
+  // empty/whitespace-only queries. Lengths/counts only — never the query text.
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (trimmed === '') return;
+    const id = setTimeout(() => {
+      const resultCount = people.filter((p) =>
+        p.name.toLowerCase().includes(query.toLowerCase())
+      ).length;
+      posthog?.capture('people_search_performed', {
+        query_length: trimmed.length,
+        result_count: resultCount,
+      });
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(id);
+  }, [query, people, posthog]);
 
   return (
     <div>

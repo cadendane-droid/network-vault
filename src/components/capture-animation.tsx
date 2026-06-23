@@ -5,11 +5,13 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
 import { useRouter } from 'next/navigation';
 import { LazyMotion, m, useReducedMotion } from 'motion/react';
+import { usePostHog } from 'posthog-js/react';
 
 // Lazy-load the DOM animation features so the core `m` runtime stays small.
 const loadFeatures = () =>
@@ -26,6 +28,13 @@ const FLOAT_MS = 3000; // t=1s → 4s: fold + travel to centre
 const PUSH_LEAD_MS = 900;
 const SETTLE_MS = 250; // after arrival + navigation, before the overlay fades
 const FADE_MS = 350; // overlay cross-fade hand-off to the canvas node
+
+// person_capture_timing (#13) safety deadline. Armed when the node becomes
+// visible: if processing completion is never observed (e.g. the user leaves
+// /network before extraction finishes, so the poll stops), the event is still
+// flushed this long after node-visible with ms_to_processing_complete = null —
+// so the headline (ms_to_node_visible) is never lost.
+const TIMING_SAFETY_MS = 60000;
 
 // Final node size at centre (px). Matches the small constellation node scale.
 const NODE_SIZE = 40;
@@ -53,6 +62,21 @@ interface StartArgs {
 
 interface CaptureContextValue {
   start: (args: StartArgs) => void;
+  /**
+   * Called by the constellation when the optimistic node for `personId`
+   * actually mounts on the canvas (the real paint, in both motion paths — never
+   * the overlay animation). Records the headline ms_to_node_visible delta.
+   */
+  markNodeVisible: (personId: string) => void;
+  /**
+   * Called by the constellation when processing for `personId` reaches a
+   * terminal state — 'complete' is the client-observable mirror of the
+   * server-side `processing_completed`; 'failed' resolves the delta as null.
+   */
+  markProcessingComplete: (
+    personId: string,
+    status: 'complete' | 'failed'
+  ) => void;
 }
 
 const CaptureContext = createContext<CaptureContextValue | null>(null);
@@ -63,6 +87,12 @@ export function useCapture(): CaptureContextValue {
     throw new Error('useCapture must be used within <CaptureProvider>');
   }
   return ctx;
+}
+
+// Non-throwing accessor for components that only report timing milestones (e.g.
+// the constellation). Returns null if rendered outside a CaptureProvider.
+export function useCaptureTiming(): CaptureContextValue | null {
+  return useContext(CaptureContext);
 }
 
 // ---------------------------------------------------------------------------
@@ -80,11 +110,112 @@ interface NodeState {
 
 export function CaptureProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const posthog = usePostHog();
   const reduce = useReducedMotion();
   const reduceRef = useRef(reduce);
   useEffect(() => {
     reduceRef.current = reduce;
   }, [reduce]);
+
+  // ── person_capture_timing (#13) ──────────────────────────────────────────
+  // t=0 is submit (POST fired, top of start()). We record three ms deltas as
+  // the milestones land and emit ONE person_capture_timing event:
+  //   ms_to_post_response       — POST /api/people resolves
+  //   ms_to_node_visible        — the optimistic node actually mounts on the
+  //                               canvas (headline metric; real paint, both
+  //                               motion paths — NOT the overlay animation)
+  //   ms_to_processing_complete — processing reaches 'complete' for this person
+  // The event flushes once both node-visible AND a terminal processing signal
+  // are in (success → all three populated; failure/safety-deadline → null
+  // processing). See TIMING_SAFETY_MS and docs §3 #13.
+  const timingT0Ref = useRef<number | null>(null);
+  const timingPersonRef = useRef<string | null>(null);
+  const msToPostRef = useRef<number | null>(null);
+  const msToNodeRef = useRef<number | null>(null);
+  const msToProcRef = useRef<number | null>(null);
+  const procResolvedRef = useRef(false);
+  const timingSentRef = useRef(false);
+  const timingDeadlineRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const nowMs = () =>
+    typeof performance !== 'undefined' ? performance.now() : Date.now();
+
+  const resetTiming = useCallback(() => {
+    if (timingDeadlineRef.current) {
+      clearTimeout(timingDeadlineRef.current);
+      timingDeadlineRef.current = null;
+    }
+    timingT0Ref.current = null;
+    timingPersonRef.current = null;
+    msToPostRef.current = null;
+    msToNodeRef.current = null;
+    msToProcRef.current = null;
+    procResolvedRef.current = false;
+    timingSentRef.current = false;
+  }, []);
+
+  // Emit exactly once, only when the headline (node-visible) is known and a
+  // terminal processing signal (complete / failed / deadline) has arrived.
+  const flushTiming = useCallback(() => {
+    if (timingSentRef.current) return;
+    if (msToNodeRef.current == null) return; // headline required
+    if (!procResolvedRef.current) return; // wait for processing or deadline
+    timingSentRef.current = true;
+    if (timingDeadlineRef.current) {
+      clearTimeout(timingDeadlineRef.current);
+      timingDeadlineRef.current = null;
+    }
+    // Client timing stays inside the window guard.
+    if (typeof window !== 'undefined') {
+      posthog?.capture('person_capture_timing', {
+        person_id: timingPersonRef.current,
+        ms_to_post_response: msToPostRef.current,
+        ms_to_node_visible: msToNodeRef.current,
+        ms_to_processing_complete: msToProcRef.current,
+      });
+    }
+  }, [posthog]);
+
+  const markNodeVisible = useCallback(
+    (personId: string) => {
+      if (timingT0Ref.current == null) return;
+      if (timingPersonRef.current !== personId) return;
+      if (msToNodeRef.current != null) return; // once
+      msToNodeRef.current = Math.round(nowMs() - timingT0Ref.current);
+      // Arm the safety deadline so the event still flushes if processing
+      // completion is never observed.
+      if (!timingDeadlineRef.current && !timingSentRef.current) {
+        timingDeadlineRef.current = setTimeout(() => {
+          procResolvedRef.current = true;
+          flushTiming();
+        }, TIMING_SAFETY_MS);
+      }
+      flushTiming();
+    },
+    [flushTiming]
+  );
+
+  const markProcessingComplete = useCallback(
+    (personId: string, status: 'complete' | 'failed') => {
+      if (timingT0Ref.current == null) return;
+      if (timingPersonRef.current !== personId) return;
+      if (procResolvedRef.current) return;
+      procResolvedRef.current = true;
+      msToProcRef.current =
+        status === 'complete'
+          ? Math.round(nowMs() - timingT0Ref.current)
+          : null;
+      flushTiming();
+    },
+    [flushTiming]
+  );
+
+  // Clear the safety deadline if the provider itself unmounts.
+  useEffect(() => {
+    return () => {
+      if (timingDeadlineRef.current) clearTimeout(timingDeadlineRef.current);
+    };
+  }, []);
 
   const [phase, setPhase] = useState<Phase>('idle');
   const [node, setNode] = useState<NodeState | null>(null);
@@ -152,6 +283,11 @@ export function CaptureProvider({ children }: { children: React.ReactNode }) {
       navGateRef.current = false;
       personIdRef.current = null;
 
+      // t=0 for #13 — the POST has just fired (the form builds personIdPromise,
+      // which kicks off the fetch, immediately before calling start()).
+      resetTiming();
+      timingT0Ref.current = nowMs();
+
       const vw = window.innerWidth;
       const vh = window.innerHeight;
       const origin = {
@@ -171,10 +307,18 @@ export function CaptureProvider({ children }: { children: React.ReactNode }) {
       personIdPromise
         .then((id) => {
           personIdRef.current = id;
+          // #13: POST resolved — record the response delta and bind the timing
+          // to this person so the constellation milestones match.
+          if (timingT0Ref.current != null) {
+            timingPersonRef.current = id;
+            msToPostRef.current = Math.round(nowMs() - timingT0Ref.current);
+          }
           navigate();
         })
         .catch(() => {
-          // POST failed — cancel the float; the form surfaces the error.
+          // POST failed — cancel the float; the form surfaces the error. Abandon
+          // this capture's timing (no node will mount, nothing to report).
+          resetTiming();
           reset();
         });
 
@@ -200,7 +344,7 @@ export function CaptureProvider({ children }: { children: React.ReactNode }) {
       }, HOLD_MS);
       timers.current.push(t1);
     },
-    [navigate, reset]
+    [navigate, reset, resetTiming]
   );
 
   // Per-phase animation target. borderRadius stays a percentage end-to-end so
@@ -278,8 +422,15 @@ export function CaptureProvider({ children }: { children: React.ReactNode }) {
 
   const showNode = node && phase !== 'idle' && !reduce;
 
+  // Stable identity so timing consumers (constellation) don't re-run their
+  // milestone effects on every animation-phase re-render of this provider.
+  const contextValue = useMemo(
+    () => ({ start, markNodeVisible, markProcessingComplete }),
+    [start, markNodeVisible, markProcessingComplete]
+  );
+
   return (
-    <CaptureContext.Provider value={{ start }}>
+    <CaptureContext.Provider value={contextValue}>
       {children}
       <LazyMotion features={loadFeatures} strict>
         <div

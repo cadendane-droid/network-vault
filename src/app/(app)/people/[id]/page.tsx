@@ -72,7 +72,16 @@ async function getPersonProfile(personId: string, userId: string) {
     };
   });
 
-  return { person, factsByType, conversations, connections, latestSource };
+  return {
+    person,
+    factsByType,
+    conversations,
+    connections,
+    latestSource,
+    // Person-level signals for profile_viewed (counts/booleans only, no name).
+    factCount: facts.length,
+    hasConfirmedFacts: facts.some((f) => f.status === 'confirmed'),
+  };
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -135,8 +144,15 @@ export default async function PersonProfilePage({
   const data = await getPersonProfile(id, dbUser.id);
   if (!data) notFound();
 
-  const { person, factsByType, conversations, connections, latestSource } =
-    data;
+  const {
+    person,
+    factsByType,
+    conversations,
+    connections,
+    latestSource,
+    factCount,
+    hasConfirmedFacts,
+  } = data;
 
   const processingStatus = latestSource?.processing_status ?? 'complete';
   const isProcessing =
@@ -175,7 +191,11 @@ export default async function PersonProfilePage({
         paddingBottom: 40,
       }}
     >
-      <TrackProfileView personId={person.id} />
+      <TrackProfileView
+        personId={person.id}
+        factCount={factCount}
+        hasConfirmedFacts={hasConfirmedFacts}
+      />
       {/* Sticky top bar */}
       <header
         style={{

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { isAdminClerkId } from '@/lib/admin';
+import { captureServerEvent } from '@/lib/posthog-server';
 
 const FEEDBACK_MESSAGE_LIMIT = 2000;
 
@@ -53,6 +54,12 @@ export async function POST(request: NextRequest) {
           ? user_agent.trim()
           : null,
     },
+  });
+
+  // Analytics: metadata only — never the message body (same rule as raw_text).
+  await captureServerEvent(user.clerkId, 'feedback_submitted', {
+    message_length: message.trim().length,
+    page: typeof page === 'string' && page.trim() !== '' ? page.trim() : null,
   });
 
   return NextResponse.json({ ok: true }, { status: 201 });
